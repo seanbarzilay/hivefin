@@ -1,5 +1,6 @@
 defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
-  use HivefinWeb.ConnCase, async: true
+  # Mutates :image_cache_dir app env — must not run concurrent with other suites.
+  use HivefinWeb.ConnCase, async: false
 
   alias Hivefin.Library.{Image, LibraryContext}
   alias Hivefin.Repo

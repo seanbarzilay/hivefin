@@ -129,17 +129,25 @@ defmodule Hivefin.Metadata.TMDB do
     Application.get_env(:hivefin, :metadata_req_options, [])
   end
 
-  # Never include raw exception messages that may echo query strings with api_key.
-  defp inspect_safe(%Req.TransportError{reason: reason}), do: inspect(reason)
-  defp inspect_safe(reason) when is_atom(reason), do: inspect(reason)
-  defp inspect_safe(reason) when is_binary(reason), do: redact(reason)
-  defp inspect_safe(reason), do: redact(inspect(reason))
-
-  defp redact(text) when is_binary(text) do
-    text
-    |> String.replace(~r/api_key=[^&\s]+/i, "api_key=REDACTED")
-    |> String.replace(~r/"test-tmdb-key"/, "\"REDACTED\"")
+  @doc false
+  def redact_secrets(term) when not is_binary(term) do
+    term |> inspect() |> redact_secrets()
   end
+
+  def redact_secrets(text) when is_binary(text) do
+    text
+    # Query-string forms: api_key=… (stop at & # " ' space)
+    |> String.replace(~r/api_key=[^&\s#"'<>]+/i, "api_key=REDACTED")
+    # JSON / map-ish: "api_key" => "…" or "api_key":"…"
+    |> String.replace(~r/"api_key"\s*(?:=>|:)\s*"[^"]*"/i, "\"api_key\" => \"REDACTED\"")
+    # Keyword lists in inspect: api_key: "…"
+    |> String.replace(~r/api_key:\s*"[^"]*"/i, "api_key: \"REDACTED\"")
+  end
+
+  # Never include raw exception messages that may echo query strings with api_key.
+  defp inspect_safe(%Req.TransportError{reason: reason}), do: redact_secrets(reason)
+  defp inspect_safe(reason) when is_atom(reason), do: inspect(reason)
+  defp inspect_safe(reason), do: redact_secrets(reason)
 
   defp normalize_search_result(result) when is_map(result) do
     %{

@@ -14,7 +14,8 @@ defmodule Hivefin.Metadata.Worker do
   @doc """
   Synchronously refreshes metadata for a movie item.
 
-  Always returns `:ok` (errors are logged).
+  Always returns `:ok` (errors are logged). Catches exceptions and GenServer
+  call exits (e.g. rate-limiter timeout) so async Tasks stay quiet.
   """
   @spec refresh_item(Ecto.UUID.t()) :: :ok
   def refresh_item(item_id) when is_binary(item_id) do
@@ -32,7 +33,17 @@ defmodule Hivefin.Metadata.Worker do
     end
   rescue
     e ->
-      Logger.warning("metadata refresh crashed for #{item_id}: #{Exception.message(e)}")
+      Logger.warning(
+        "metadata refresh crashed for #{item_id}: #{TMDB.redact_secrets(Exception.message(e))}"
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "metadata refresh exited for #{item_id}: #{TMDB.redact_secrets(reason)}"
+      )
+
       :ok
   end
 
@@ -71,7 +82,10 @@ defmodule Hivefin.Metadata.Worker do
         :ok
 
       {:error, reason} ->
-        Logger.info("metadata match failed for item #{item.id}: #{inspect(reason)}")
+        Logger.info(
+          "metadata match failed for item #{item.id}: #{TMDB.redact_secrets(reason)}"
+        )
+
         :ok
     end
   end
@@ -101,15 +115,21 @@ defmodule Hivefin.Metadata.Worker do
 
     if poster = provider.image_url(match[:poster_path], :poster) do
       case ImageCache.store(item_id, :primary, poster) do
-        {:ok, _} -> :ok
-        {:error, reason} -> Logger.warning("primary image store failed: #{inspect(reason)}")
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("primary image store failed: #{TMDB.redact_secrets(reason)}")
       end
     end
 
     if backdrop = provider.image_url(match[:backdrop_path], :backdrop) do
       case ImageCache.store(item_id, :backdrop, backdrop) do
-        {:ok, _} -> :ok
-        {:error, reason} -> Logger.warning("backdrop image store failed: #{inspect(reason)}")
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("backdrop image store failed: #{TMDB.redact_secrets(reason)}")
       end
     end
 

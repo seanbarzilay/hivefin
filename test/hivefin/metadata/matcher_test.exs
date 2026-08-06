@@ -65,6 +65,27 @@ defmodule Hivefin.Metadata.MatcherTest do
     assert {:error, :no_match} = Matcher.match_movie(item)
   end
 
+  test "match_movie rejects score-0 results (unrelated name/year)", %{item: item} do
+    Req.Test.stub(TMDB, fn conn ->
+      assert String.ends_with?(conn.request_path, "/search/movie")
+
+      Req.Test.json(conn, %{
+        "results" => [
+          %{
+            "id" => 1,
+            "title" => "Completely Different Film",
+            "overview" => "no affinity",
+            "release_date" => "1999-01-01",
+            "poster_path" => "/z.jpg",
+            "backdrop_path" => nil
+          }
+        ]
+      })
+    end)
+
+    assert {:error, :no_match} = Matcher.match_movie(item)
+  end
+
   test "match_movie prefers existing provider id", %{item: item} do
     {:ok, item} =
       item

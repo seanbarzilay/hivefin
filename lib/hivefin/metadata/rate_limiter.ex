@@ -25,7 +25,12 @@ defmodule Hivefin.Metadata.RateLimiter do
         :ok
 
       _pid ->
-        GenServer.call(server, :checkout, 30_000)
+        try do
+          GenServer.call(server, :checkout, 30_000)
+        catch
+          # Timeout or server death must not crash metadata Tasks
+          :exit, _reason -> :ok
+        end
     end
   end
 

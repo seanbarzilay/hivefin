@@ -87,32 +87,37 @@ defmodule Hivefin.Metadata.Matcher do
     })
   end
 
+  # Minimum score to accept a search hit. Name exact match = 2, year exact = 2,
+  # year ±1 = 1. Score 0 (no name/year affinity) is always rejected.
+  @min_match_score 1
+
   defp pick_best(results, name, year) do
     normalized = normalize_name(name)
 
     scored =
       results
       |> Enum.filter(fn r -> is_integer(r.tmdb_id) end)
-      |> Enum.map(fn r ->
-        name_score = if normalize_name(r.name) == normalized, do: 2, else: 0
-
-        year_score =
-          cond do
-            is_nil(year) -> 0
-            r.production_year == year -> 2
-            is_integer(r.production_year) and abs(r.production_year - year) <= 1 -> 1
-            true -> 0
-          end
-
-        {name_score + year_score, r}
-      end)
+      |> Enum.map(fn r -> {score_result(r, normalized, year), r} end)
       |> Enum.sort_by(fn {score, _} -> -score end)
 
     case scored do
-      [{score, best} | _] when score > 0 or year == nil -> best
-      [{_score, best} | _] -> best
-      [] -> nil
+      [{score, best} | _] when score >= @min_match_score -> best
+      _ -> nil
     end
+  end
+
+  defp score_result(r, normalized_name, year) do
+    name_score = if normalize_name(r.name) == normalized_name, do: 2, else: 0
+
+    year_score =
+      cond do
+        is_nil(year) -> 0
+        r.production_year == year -> 2
+        is_integer(r.production_year) and abs(r.production_year - year) <= 1 -> 1
+        true -> 0
+      end
+
+    name_score + year_score
   end
 
   defp normalize_name(name) when is_binary(name) do
