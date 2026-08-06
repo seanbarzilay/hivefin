@@ -16,7 +16,15 @@ config :hivefin,
   max_transcodes: 2,
   allow_cpu_fallback: true,
   session_idle_ms: 60_000,
-  transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode")
+  transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode"),
+  image_cache_dir: Path.join(System.tmp_dir!(), "hivefin-image-cache"),
+  tmdb_api_key: nil,
+  tmdb_base_url: "https://api.themoviedb.org/3",
+  tmdb_image_base_url: "https://image.tmdb.org/t/p",
+  tmdb_rate_limit_per_sec: 4,
+  metadata_provider: Hivefin.Metadata.TMDB,
+  # Extra Req options for tests (e.g. plug: {Req.Test, Hivefin.Metadata.TMDB})
+  metadata_req_options: []
 
 # Configure the endpoint
 config :hivefin, HivefinWeb.Endpoint,

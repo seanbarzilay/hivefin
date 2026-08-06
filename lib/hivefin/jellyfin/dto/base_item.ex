@@ -8,6 +8,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
   alias Hivefin.Jellyfin.SystemInfo
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, UserData}
+  alias Hivefin.Metadata.ImageCache
 
   @type field_opt :: String.t() | atom()
 
@@ -40,7 +41,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "SeriesId" => series_id(item),
       "SeasonId" => season_id(item),
       "ProviderIds" => item.provider_ids || %{},
-      "ImageTags" => %{},
+      "ImageTags" => ImageCache.image_tags_for(item),
       "UserData" => user_data(user_data)
     }
 

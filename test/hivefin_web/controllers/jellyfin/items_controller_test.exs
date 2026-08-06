@@ -177,7 +177,10 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     assert total == 3
   end
 
-  test "GET /Items/:item_id/Images/:image_type returns 404 stub", %{conn: conn, movie: movie} do
+  test "GET /Items/:item_id/Images/:image_type returns 404 when no cache", %{
+    conn: conn,
+    movie: movie
+  } do
     conn = get(conn, ~p"/Items/#{movie.id}/Images/Primary")
     assert conn.status == 404
   end

@@ -34,7 +34,13 @@ config :hivefin,
   hw_accel: :none,
   allow_cpu_fallback: true,
   session_idle_ms: 60_000,
-  transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode-test")
+  transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode-test"),
+  image_cache_dir: Path.join(System.tmp_dir!(), "hivefin-image-cache-test"),
+  tmdb_api_key: "test-tmdb-key",
+  tmdb_rate_limit_per_sec: 1000,
+  # Scanner must not fire real/stub HTTP during library tests
+  metadata_enqueue: false,
+  metadata_req_options: [retry: false]
 
 # Print only warnings and errors during test
 config :logger, level: :warning

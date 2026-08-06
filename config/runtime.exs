@@ -66,6 +66,21 @@ if idle = System.get_env("HIVEFIN_SESSION_IDLE_MS") do
   end
 end
 
+if key = System.get_env("HIVEFIN_TMDB_API_KEY") do
+  config :hivefin, :tmdb_api_key, key
+end
+
+if dir = System.get_env("HIVEFIN_IMAGE_CACHE_DIR") do
+  config :hivefin, :image_cache_dir, dir
+end
+
+if rate = System.get_env("HIVEFIN_TMDB_RATE_LIMIT") do
+  case Integer.parse(rate) do
+    {n, _} when n > 0 -> config :hivefin, :tmdb_rate_limit_per_sec, n
+    _ -> :ok
+  end
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

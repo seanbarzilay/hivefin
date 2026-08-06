@@ -16,6 +16,8 @@ defmodule Hivefin.Application do
       {Phoenix.PubSub, name: Hivefin.PubSub},
       {Task.Supervisor, name: Hivefin.Scanner.TaskSupervisor},
       Hivefin.Scanner,
+      {Task.Supervisor, name: Hivefin.Metadata.TaskSupervisor},
+      Hivefin.Metadata.RateLimiter,
       {Registry, keys: :unique, name: Hivefin.Playback.Registry},
       Hivefin.Playback.Supervisor,
       # Start to serve requests, typically the last entry

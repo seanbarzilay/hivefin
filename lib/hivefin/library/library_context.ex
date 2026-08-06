@@ -134,7 +134,7 @@ defmodule Hivefin.Library.LibraryContext do
   def get_item(id) do
     Item
     |> where([i], i.id == ^id)
-    |> preload(:parent)
+    |> preload([:parent, :images])
     |> Repo.one()
   end
 
@@ -144,7 +144,7 @@ defmodule Hivefin.Library.LibraryContext do
   def get_item_with_sources(id) do
     Item
     |> where([i], i.id == ^id)
-    |> preload([:parent, media_sources: :media_streams])
+    |> preload([:parent, :images, media_sources: :media_streams])
     |> Repo.one()
   end
 
@@ -730,8 +730,8 @@ defmodule Hivefin.Library.LibraryContext do
   defp maybe_limit(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
   defp maybe_limit(query, _), do: query
 
-  defp item_preloads(true), do: [:parent, media_sources: :media_streams]
-  defp item_preloads(_), do: [:parent]
+  defp item_preloads(true), do: [:parent, :images, media_sources: :media_streams]
+  defp item_preloads(_), do: [:parent, :images]
 
   defp paginate(list, start_index, nil) when start_index <= 0, do: list
 

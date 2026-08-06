@@ -17,6 +17,7 @@ defmodule Hivefin.Scanner do
   import Ecto.Query
 
   alias Hivefin.Library.{LibraryContext, ScanJob}
+  alias Hivefin.Metadata.Worker, as: MetadataWorker
   alias Hivefin.Repo
   alias Hivefin.Scanner.{MovieMatcher, PathRules, SeriesMatcher, Walker}
 
@@ -284,12 +285,24 @@ defmodule Hivefin.Scanner do
          # Probe only inside upsert when size/mtime require it
          {:ok, _source, source_status} <-
            LibraryContext.upsert_media_source(item.id, path, stat) do
+      maybe_enqueue_metadata(item, item_status)
       {:ok, import_status(item_status, source_status)}
     else
       {:error, reason} -> {:error, reason}
       false -> {:error, :outside_root}
     end
   end
+
+  # Best-effort: never fail the scan if metadata enqueue/refresh errors.
+  defp maybe_enqueue_metadata(%{type: :movie, id: id}, :created) when is_binary(id) do
+    MetadataWorker.enqueue_refresh(id)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp maybe_enqueue_metadata(_item, _status), do: :ok
 
   defp import_tv_file(library, root, path) do
     with {:ok, stat} <- File.stat(path),
