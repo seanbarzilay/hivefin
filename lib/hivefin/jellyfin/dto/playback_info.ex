@@ -1,0 +1,183 @@
+defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
+  @moduledoc """
+  Builds Jellyfin PlaybackInfoResponse-shaped maps.
+
+  Absolute filesystem paths are never included. Clients receive signed stream
+  URLs (`DirectStreamUrl` / `TranscodingUrl`) instead.
+  """
+
+  alias Hivefin.Accounts.User
+  alias Hivefin.Library.{Item, MediaSource, MediaStream}
+  alias Hivefin.Playback.{Decision, DeviceProfile, StreamToken}
+
+  @doc """
+  Builds a PlaybackInfo response for an item with preloaded media sources.
+
+  ## Options
+  - `:device_profile` — normalized profile or raw Jellyfin DeviceProfile map
+  - `:play_session_id` — optional; generated if omitted
+  """
+  def build(%Item{} = item, %User{} = user, opts \\ []) do
+    profile =
+      case Keyword.get(opts, :device_profile) do
+        %{} = p ->
+          if Map.has_key?(p, :direct_play_containers) or Map.has_key?(p, "direct_play_containers") do
+            p
+          else
+            DeviceProfile.from_jellyfin(p)
+          end
+
+        _ ->
+          DeviceProfile.default()
+      end
+
+    sources =
+      case Map.get(item, :media_sources) do
+        %Ecto.Association.NotLoaded{} -> []
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    play_session_id = Keyword.get(opts, :play_session_id) || Ecto.UUID.generate()
+
+    media_sources =
+      Enum.map(sources, fn source ->
+        from_media_source(source, item, user, profile, play_session_id)
+      end)
+
+    %{
+      "MediaSources" => media_sources,
+      "PlaySessionId" => play_session_id
+    }
+  end
+
+  defp from_media_source(
+         %MediaSource{} = source,
+         %Item{} = item,
+         %User{} = user,
+         profile,
+         play_session_id
+       ) do
+    {method, meta} = Decision.choose(source, profile)
+    token = StreamToken.sign(user.id, item.id, source.id)
+
+    streams =
+      case Map.get(source, :media_streams) do
+        %Ecto.Association.NotLoaded{} -> []
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    base = %{
+      "Id" => source.id,
+      "ItemId" => item.id,
+      "Container" => source.container,
+      "Size" => source.size,
+      "Bitrate" => source.bitrate,
+      "RunTimeTicks" => source.duration_ticks,
+      "Type" => "Default",
+      "Protocol" => "Http",
+      "ReadAtNativeFramerate" => false,
+      "MediaStreams" => Enum.map(streams, &from_media_stream/1),
+      "Formats" => [],
+      "RequiredHttpHeaders" => %{}
+    }
+
+    base
+    |> put_play_method(method, item.id, source.id, token, play_session_id, meta)
+    |> drop_nils()
+  end
+
+  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta) do
+    url = direct_stream_url(item_id, source_id, token, static: true)
+
+    Map.merge(base, %{
+      "SupportsDirectPlay" => true,
+      "SupportsDirectStream" => true,
+      "SupportsTranscoding" => false,
+      "DirectStreamUrl" => url,
+      "TranscodingUrl" => nil,
+      "TranscodingSubProtocol" => nil,
+      "TranscodingContainer" => nil,
+      "IsRemote" => false
+    })
+  end
+
+  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, meta) do
+    # Remux endpoint — runner in Task 8; URL is stable for clients.
+    container = Map.get(meta, :remux_container, "ts")
+    url = remux_url(item_id, source_id, token, session, container)
+
+    Map.merge(base, %{
+      "SupportsDirectPlay" => false,
+      "SupportsDirectStream" => true,
+      "SupportsTranscoding" => true,
+      "DirectStreamUrl" => nil,
+      "TranscodingUrl" => url,
+      "TranscodingSubProtocol" => "http",
+      "TranscodingContainer" => container,
+      "IsRemote" => false
+    })
+  end
+
+  defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
+    url = transcode_url(item_id, source_id, token, session)
+
+    Map.merge(base, %{
+      "SupportsDirectPlay" => false,
+      "SupportsDirectStream" => false,
+      "SupportsTranscoding" => true,
+      "DirectStreamUrl" => nil,
+      "TranscodingUrl" => url,
+      "TranscodingSubProtocol" => "hls",
+      "TranscodingContainer" => "ts",
+      "IsRemote" => false
+    })
+  end
+
+  defp direct_stream_url(item_id, source_id, token, opts) do
+    static = if Keyword.get(opts, :static, true), do: "true", else: "false"
+
+    "/Videos/#{item_id}/stream?MediaSourceId=#{encode(source_id)}&Static=#{static}&api_key=#{encode(token)}"
+  end
+
+  defp remux_url(item_id, source_id, token, session, container) do
+    "/Videos/#{item_id}/stream.#{container}?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false"
+  end
+
+  defp transcode_url(item_id, source_id, token, session) do
+    "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}"
+  end
+
+  defp from_media_stream(%MediaStream{} = stream) do
+    %{
+      "Index" => stream.index,
+      "Type" => stream_type_name(stream.type),
+      "Codec" => stream.codec,
+      "Language" => stream.language,
+      "Channels" => stream.channels,
+      "Width" => stream.width,
+      "Height" => stream.height,
+      "BitRate" => stream.bit_rate,
+      "IsDefault" => stream.is_default,
+      "IsForced" => stream.is_forced,
+      "Title" => stream.title
+    }
+    |> drop_nils()
+  end
+
+  defp stream_type_name(:video), do: "Video"
+  defp stream_type_name(:audio), do: "Audio"
+  defp stream_type_name(:subtitle), do: "Subtitle"
+
+  defp stream_type_name(other) when is_atom(other),
+    do: other |> Atom.to_string() |> Macro.camelize()
+
+  defp encode(value) when is_binary(value), do: URI.encode_www_form(value)
+
+  defp drop_nils(map) do
+    map
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+end

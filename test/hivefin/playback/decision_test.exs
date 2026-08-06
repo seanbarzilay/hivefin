@@ -1,0 +1,59 @@
+defmodule Hivefin.Playback.DecisionTest do
+  use ExUnit.Case, async: true
+
+  alias Hivefin.Playback.Decision
+  alias Hivefin.Playback.DeviceProfile
+
+  test "h264 aac mp4 direct plays when profile allows" do
+    source = %{container: "mp4", video_codec: "h264", audio_codec: "aac"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
+    assert {:direct_play, meta} = Decision.choose(source, profile)
+    assert meta.reason == :compatible
+  end
+
+  test "mkv h264 remuxes when mkv not direct-playable" do
+    source = %{container: "mkv", video_codec: "h264", audio_codec: "aac"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
+    assert {:direct_stream, meta} = Decision.choose(source, profile)
+    assert meta.reason == :container_not_allowed
+    assert meta.remux_container == "ts"
+  end
+
+  test "unsupported video codec forces transcode" do
+    source = %{container: "mp4", video_codec: "hevc", audio_codec: "aac"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
+    assert {:transcode, meta} = Decision.choose(source, profile)
+    assert meta.reason == :video_codec_not_allowed
+  end
+
+  test "unsupported audio codec forces transcode" do
+    source = %{container: "mp4", video_codec: "h264", audio_codec: "dts"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
+    assert {:transcode, meta} = Decision.choose(source, profile)
+    assert meta.reason == :audio_codec_not_allowed
+  end
+
+  test "accepts MediaSource-shaped maps with media_streams" do
+    source = %{
+      container: "mp4",
+      media_streams: [
+        %{type: :video, codec: "h264"},
+        %{type: :audio, codec: "aac"}
+      ]
+    }
+
+    profile = DeviceProfile.default()
+    assert {:direct_play, _} = Decision.choose(source, profile)
+  end
+
+  test "empty profile falls back to default-compatible direct play for mp4 h264 aac" do
+    source = %{container: "mp4", video_codec: "h264", audio_codec: "aac"}
+    assert {:direct_play, _} = Decision.choose(source, DeviceProfile.default())
+  end
+
+  test "codec comparison is case-insensitive" do
+    source = %{container: "MP4", video_codec: "H264", audio_codec: "AAC"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
+    assert {:direct_play, _} = Decision.choose(source, profile)
+  end
+end

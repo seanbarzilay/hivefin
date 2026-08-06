@@ -10,6 +10,7 @@ defmodule Hivefin.Library.LibraryContext do
   alias Hivefin.Repo
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, ScanJob}
   alias Hivefin.MediaInfo.Prober
+  alias Hivefin.Scanner.PathRules
 
   @doc """
   Creates a library.
@@ -195,6 +196,82 @@ defmodule Hivefin.Library.LibraryContext do
     |> preload([:item, :media_streams])
     |> Repo.one()
   end
+
+  def get_media_source(id) do
+    MediaSource
+    |> where([ms], ms.id == ^id)
+    |> preload([:media_streams, item: :library])
+    |> Repo.one()
+  end
+
+  @doc """
+  Resolves a filesystem path for progressive streaming.
+
+  Security:
+  - `claims.item_id` must match `item_id`
+  - `claims.media_source_id` must belong to that item
+  - Resolved path must remain under the item's library root
+  - File must exist as a regular file
+
+  Returns `{:ok, path}` or `{:error, :not_found | :forbidden}`.
+  """
+  def media_path_for_item(item_id, claims) when is_binary(item_id) and is_map(claims) do
+    claim_item_id = Map.get(claims, :item_id) || Map.get(claims, "item_id")
+    source_id = Map.get(claims, :media_source_id) || Map.get(claims, "media_source_id")
+
+    cond do
+      not is_binary(claim_item_id) or not is_binary(source_id) ->
+        {:error, :forbidden}
+
+      claim_item_id != item_id ->
+        {:error, :forbidden}
+
+      true ->
+        resolve_media_path(item_id, source_id)
+    end
+  end
+
+  def media_path_for_item(_, _), do: {:error, :forbidden}
+
+  defp resolve_media_path(item_id, source_id) do
+    case get_media_source(source_id) do
+      %MediaSource{item_id: ^item_id, path: path} = source when is_binary(path) ->
+        item = loaded_or(source.item, fn -> get_item(item_id) end)
+
+        library =
+          case item do
+            %Item{} = item ->
+              loaded_or(item.library, fn -> get_library(item.library_id) end)
+
+            _ ->
+              nil
+          end
+
+        cond do
+          is_nil(library) ->
+            {:error, :not_found}
+
+          not PathRules.under_root?(library.path, path) ->
+            {:error, :forbidden}
+
+          not File.regular?(path) ->
+            {:error, :not_found}
+
+          true ->
+            {:ok, Path.expand(path)}
+        end
+
+      %MediaSource{} ->
+        {:error, :forbidden}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp loaded_or(%Ecto.Association.NotLoaded{}, fun), do: fun.()
+  defp loaded_or(nil, fun), do: fun.()
+  defp loaded_or(value, _fun), do: value
 
   def create_scan_job(attrs) do
     %ScanJob{}

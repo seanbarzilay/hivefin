@@ -23,6 +23,11 @@ defmodule HivefinWeb.Router do
     get "/System/Info/Public", SystemController, :public_info
     post "/Users/AuthenticateByName", UserController, :authenticate_by_name
 
+    # Stream URLs are authenticated via signed stream token query params.
+    get "/Videos/:item_id/stream", VideoController, :stream
+    get "/Videos/:item_id/stream.:container", VideoController, :stream
+    get "/Videos/:item_id/master.m3u8", VideoController, :master_m3u8
+
     pipe_through :jellyfin_auth
     get "/System/Info", SystemController, :info
     get "/Users/Me", UserController, :me
@@ -32,6 +37,7 @@ defmodule HivefinWeb.Router do
     get "/Shows/:series_id/Seasons", ItemsController, :seasons
     get "/Shows/:series_id/Episodes", ItemsController, :episodes
     get "/Items/:item_id/Images/:image_type", ImagesController, :show
+    post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
   end
 
   scope "/api", HivefinWeb do
