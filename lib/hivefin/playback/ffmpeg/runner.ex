@@ -5,6 +5,10 @@ defmodule Hivefin.Playback.FFmpeg.Runner do
   Only accepts argv lists produced by `Hivefin.Playback.FFmpeg.Args` (or
   other server-side builders). Does not interpolate client-supplied filter
   strings.
+
+  **Stdout is media only** — stderr is never merged into the Port stream
+  (no `:stderr_to_stdout`). FFmpeg log lines go to the BEAM process stderr /
+  logger sink, not into MPEG-TS.
   """
 
   require Logger
@@ -23,41 +27,16 @@ defmodule Hivefin.Playback.FFmpeg.Runner do
   def open(args, opts \\ []) when is_list(args) do
     ffmpeg = Keyword.get(opts, :ffmpeg_path) || ffmpeg_path()
 
-    unless is_binary(ffmpeg) and ffmpeg != "" do
-      throw({:error, :ffmpeg_missing})
+    cond do
+      not is_binary(ffmpeg) or ffmpeg == "" ->
+        {:error, :ffmpeg_missing}
+
+      String.contains?(ffmpeg, "/") and not File.regular?(ffmpeg) ->
+        {:error, :ffmpeg_missing}
+
+      true ->
+        do_open(find_executable(ffmpeg), args, opts)
     end
-
-    # Validate executable exists when path is absolute-ish; relative names rely on PATH via spawn.
-    if String.contains?(ffmpeg, "/") and not File.regular?(ffmpeg) do
-      {:error, :ffmpeg_missing}
-    else
-      exec = find_executable(ffmpeg)
-
-      port_opts = [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        :use_stdio,
-        {:args, args},
-        {:parallelism, true}
-      ]
-
-      port_opts =
-        port_opts
-        |> maybe_put(:cd, Keyword.get(opts, :cd) && to_charlist(Keyword.get(opts, :cd)))
-        |> maybe_put(:env, Keyword.get(opts, :env))
-
-      try do
-        port = Port.open({:spawn_executable, to_charlist(exec)}, port_opts)
-        {:ok, port}
-      rescue
-        e ->
-          Logger.warning("Failed to open ffmpeg port: #{inspect(e)}")
-          {:error, {:port_open_failed, e}}
-      end
-    end
-  catch
-    {:error, reason} -> {:error, reason}
   end
 
   @doc """
@@ -115,6 +94,31 @@ defmodule Hivefin.Playback.FFmpeg.Runner do
   end
 
   def kill(_), do: :ok
+
+  defp do_open(exec, args, opts) do
+    # No :stderr_to_stdout — keeps MPEG-TS / media bytes free of log text.
+    port_opts = [
+      :binary,
+      :exit_status,
+      :use_stdio,
+      {:args, args},
+      {:parallelism, true}
+    ]
+
+    port_opts =
+      port_opts
+      |> maybe_put(:cd, Keyword.get(opts, :cd) && to_charlist(Keyword.get(opts, :cd)))
+      |> maybe_put(:env, Keyword.get(opts, :env))
+
+    try do
+      port = Port.open({:spawn_executable, to_charlist(exec)}, port_opts)
+      {:ok, port}
+    rescue
+      e ->
+        Logger.warning("Failed to open ffmpeg port: #{inspect(e)}")
+        {:error, {:port_open_failed, e}}
+    end
+  end
 
   defp ffmpeg_path do
     Application.get_env(:hivefin, :ffmpeg_path) ||

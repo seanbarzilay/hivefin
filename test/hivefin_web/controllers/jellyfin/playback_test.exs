@@ -222,7 +222,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
   end
 
   @tag :ffmpeg
-  test "transcode master.m3u8 streams re-encoded MPEG-TS", %{
+  test "transcode progressive stream.ts streams re-encoded MPEG-TS", %{
     movie: movie,
     source: source,
     user: user
@@ -232,16 +232,19 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn =
       build_conn()
-      |> get(~p"/Videos/#{movie.id}/master.m3u8", %{
+      |> get(~p"/Videos/#{movie.id}/stream.ts", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
         "PlaySessionId" => session,
+        "Static" => "false",
+        "Transcode" => "true",
         "MaxHeight" => "240"
       })
 
     assert conn.status == 200
     body = response(conn, 200)
     assert byte_size(body) > 100
+    refute body =~ "ffmpeg"
   end
 
   @tag :ffmpeg
@@ -271,15 +274,44 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn =
       build_conn()
-      |> get(~p"/Videos/#{movie.id}/master.m3u8", %{
+      |> get(~p"/Videos/#{movie.id}/stream.ts", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
+        "Static" => "false",
+        "Transcode" => "true",
         "PlaySessionId" => "busy-#{System.unique_integer([:positive])}"
       })
 
     assert %{"error" => "too_many_transcodes"} = json_response(conn, 503)
 
     Hivefin.Playback.Session.stop(hold)
+  end
+
+  test "PlaybackInfo transcode uses progressive http URL not hls master", %{
+    conn: conn,
+    movie: movie
+  } do
+    body = %{
+      "DeviceProfile" => %{
+        "DirectPlayProfiles" => [
+          %{
+            "Container" => "mp4",
+            "Type" => "Video",
+            "VideoCodec" => "hevc",
+            "AudioCodec" => "aac"
+          }
+        ]
+      }
+    }
+
+    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
+    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+    assert ms["SupportsTranscoding"] == true
+    assert ms["TranscodingSubProtocol"] == "http"
+    assert ms["TranscodingContainer"] == "ts"
+    assert ms["TranscodingUrl"] =~ "stream.ts"
+    assert ms["TranscodingUrl"] =~ "Transcode=true"
+    refute ms["TranscodingUrl"] =~ "master.m3u8"
   end
 
   test "PlaybackInfo mkv profile yields DirectStream remux URL", %{

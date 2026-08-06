@@ -4,10 +4,18 @@ defmodule Hivefin.Playback.Session do
 
   ## Modes
   - `:remux` — stream-copy to MPEG-TS on stdout (`pipe:1`)
-  - `:transcode` — re-encode; default delivery is progressive MPEG-TS on stdout
+  - `:transcode` — re-encode; progressive MPEG-TS on stdout
 
-  On terminate: SIGTERM/SIGKILL FFmpeg and remove the session temp directory.
-  HW encoder init failure retries once with `:libx264` when CPU fallback is allowed.
+  ## Lifecycle
+  - Monitors HTTP consumer processes (`attach_consumer/2`); last consumer exit
+    starts idle countdown.
+  - Self-stops after configurable idle with no consumers (`:session_idle_ms`,
+    default 60s).
+  - Waiter timeouts are tracked server-side so GenServer.call timeouts do not
+    leave orphaned waiters; clients should still `stop/1` on their own timeout.
+  - On terminate: SIGTERM/SIGKILL FFmpeg and remove temp dir **only if under**
+    configured `:transcode_dir`.
+  - HW encoder exit failure retries once with `:libx264` when CPU fallback allowed.
   """
 
   use GenServer
@@ -19,6 +27,7 @@ defmodule Hivefin.Playback.Session do
   @registry Hivefin.Playback.Registry
   @ready_timeout_ms 15_000
   @chunk_timeout_ms 10_000
+  @default_idle_ms 60_000
 
   defstruct [
     :id,
@@ -34,8 +43,11 @@ defmodule Hivefin.Playback.Session do
     :status,
     :allow_cpu_fallback,
     :fallback_attempted,
+    :idle_timer,
     buffer: <<>>,
-    waiters: []
+    waiters: [],
+    consumers: %{},
+    last_activity_ms: 0
   ]
 
   @type start_attrs :: %{
@@ -70,33 +82,52 @@ defmodule Hivefin.Playback.Session do
   def via(id), do: {:via, Registry, {@registry, id}}
 
   @doc """
-  Waits until the session has produced output (bytes or playlist) or errors.
+  Registers the HTTP (or other) consumer process. Session monitors it and
+  idles out after the last consumer exits.
+  """
+  @spec attach_consumer(pid() | String.t(), pid()) :: :ok
+  def attach_consumer(session, consumer \\ self())
+
+  def attach_consumer(pid, consumer) when is_pid(pid) and is_pid(consumer) do
+    GenServer.call(pid, {:attach_consumer, consumer})
+  end
+
+  def attach_consumer(id, consumer) when is_binary(id) and is_pid(consumer) do
+    GenServer.call(via(id), {:attach_consumer, consumer})
+  end
+
+  @doc """
+  Waits until the session has produced output or errors.
+
+  On client-side call timeout the session is stopped so slots are not held.
   """
   @spec await_ready(pid() | String.t(), timeout()) ::
           {:ok, :pipe | :hls} | {:error, term()}
   def await_ready(session, timeout \\ @ready_timeout_ms)
 
   def await_ready(pid, timeout) when is_pid(pid) do
-    GenServer.call(pid, :await_ready, timeout + 100)
+    call_with_orphan_guard(pid, {:await_ready, timeout}, timeout)
   end
 
   def await_ready(id, timeout) when is_binary(id) do
-    GenServer.call(via(id), :await_ready, timeout + 100)
+    call_with_orphan_guard(via(id), {:await_ready, timeout}, timeout)
   end
 
   @doc """
   Reads the next stdout chunk for pipe-mode sessions.
+
+  On client-side call timeout the session is stopped (no progress path).
   """
   @spec read_chunk(pid() | String.t(), timeout()) ::
           {:ok, binary()} | {:error, :closed | :timeout | term()}
   def read_chunk(session, timeout \\ @chunk_timeout_ms)
 
   def read_chunk(pid, timeout) when is_pid(pid) do
-    GenServer.call(pid, :read_chunk, timeout + 100)
+    call_with_orphan_guard(pid, {:read_chunk, timeout}, timeout)
   end
 
   def read_chunk(id, timeout) when is_binary(id) do
-    GenServer.call(via(id), :read_chunk, timeout + 100)
+    call_with_orphan_guard(via(id), {:read_chunk, timeout}, timeout)
   end
 
   @spec info(pid() | String.t()) :: map()
@@ -117,6 +148,25 @@ defmodule Hivefin.Playback.Session do
     end
   end
 
+  defp call_with_orphan_guard(dest, request, timeout) do
+    GenServer.call(dest, request, timeout + 500)
+  catch
+    :exit, {:timeout, _} ->
+      stop_dest(dest)
+      {:error, :timeout}
+
+    :exit, {:noproc, _} ->
+      {:error, :noproc}
+
+    :exit, reason ->
+      stop_dest(dest)
+      {:error, reason}
+  end
+
+  defp stop_dest(pid) when is_pid(pid), do: stop(pid)
+  defp stop_dest({:via, Registry, {@registry, id}}), do: stop(id)
+  defp stop_dest(_), do: :ok
+
   # GenServer
 
   @impl true
@@ -128,40 +178,57 @@ defmodule Hivefin.Playback.Session do
     unless File.regular?(input_path) do
       {:stop, :enoent}
     else
-      temp_dir = session_temp_dir(id)
-      File.mkdir_p!(temp_dir)
-
-      encoder =
-        Map.get(attrs, :encoder) ||
-          ProbeHw.pick(%{hw_accel: ProbeHw.config_hw_accel()})
-
       allow_cpu_fallback =
         Map.get(attrs, :allow_cpu_fallback, allow_cpu_fallback_default())
 
-      height = Map.get(attrs, :height, default_height(mode))
-      format = Map.get(attrs, :format, "mpegts")
+      encoder_result =
+        case Map.fetch(attrs, :encoder) do
+          {:ok, enc} ->
+            {:ok, enc}
 
-      state = %__MODULE__{
-        id: id,
-        mode: mode,
-        input_path: input_path,
-        encoder: encoder,
-        height: height,
-        temp_dir: temp_dir,
-        format: format,
-        status: :starting,
-        allow_cpu_fallback: allow_cpu_fallback,
-        fallback_attempted: false,
-        waiters: []
-      }
+          :error ->
+            ProbeHw.pick(%{
+              hw_accel: ProbeHw.config_hw_accel(),
+              allow_cpu_fallback: allow_cpu_fallback
+            })
+        end
 
-      case start_ffmpeg(state) do
-        {:ok, state} ->
-          {:ok, %{state | status: :running}}
-
+      case encoder_result do
         {:error, reason} ->
-          cleanup_temp(temp_dir)
           {:stop, reason}
+
+        {:ok, encoder} ->
+          temp_dir = session_temp_dir(id)
+          File.mkdir_p!(temp_dir)
+
+          height = Map.get(attrs, :height, default_height(mode))
+          format = Map.get(attrs, :format, "mpegts")
+
+          state = %__MODULE__{
+            id: id,
+            mode: mode,
+            input_path: input_path,
+            encoder: encoder,
+            height: height,
+            temp_dir: temp_dir,
+            format: format,
+            status: :starting,
+            allow_cpu_fallback: allow_cpu_fallback,
+            fallback_attempted: false,
+            waiters: [],
+            consumers: %{},
+            last_activity_ms: now_ms()
+          }
+
+          case start_ffmpeg(state) do
+            {:ok, state} ->
+              state = schedule_idle(state)
+              {:ok, %{state | status: :running}}
+
+            {:error, reason} ->
+              cleanup_temp(temp_dir)
+              {:stop, reason}
+          end
       end
     end
   end
@@ -177,11 +244,19 @@ defmodule Hivefin.Playback.Session do
        temp_dir: state.temp_dir,
        os_pid: state.os_pid,
        playlist_path: state.playlist_path,
-       buffered: byte_size(state.buffer)
-     }, state}
+       buffered: byte_size(state.buffer),
+       consumers: map_size(state.consumers)
+     }, touch(state)}
   end
 
-  def handle_call(:await_ready, from, state) do
+  def handle_call({:attach_consumer, consumer}, _from, state) do
+    ref = Process.monitor(consumer)
+    consumers = Map.put(state.consumers, ref, consumer)
+    state = cancel_idle(%{state | consumers: consumers})
+    {:reply, :ok, touch(state)}
+  end
+
+  def handle_call({:await_ready, timeout}, from, state) do
     cond do
       state.status == :failed ->
         {:reply, {:error, :failed}, state}
@@ -190,27 +265,31 @@ defmodule Hivefin.Playback.Session do
         {:reply, {:error, :exited}, state}
 
       byte_size(state.buffer) > 0 ->
-        {:reply, {:ok, :pipe}, state}
+        {:reply, {:ok, :pipe}, touch(state)}
 
       is_binary(state.playlist_path) and File.regular?(state.playlist_path) ->
-        {:reply, {:ok, :hls}, state}
+        {:reply, {:ok, :hls}, touch(state)}
 
       true ->
-        {:noreply, %{state | waiters: [{:ready, from} | state.waiters]}}
+        tref = Process.send_after(self(), {:waiter_timeout, from}, timeout)
+        waiter = {:ready, from, tref}
+        {:noreply, touch(%{state | waiters: [waiter | state.waiters]})}
     end
   end
 
-  def handle_call(:read_chunk, from, state) do
+  def handle_call({:read_chunk, timeout}, from, state) do
     cond do
       byte_size(state.buffer) > 0 ->
         {chunk, rest} = take_chunk(state.buffer)
-        {:reply, {:ok, chunk}, %{state | buffer: rest}}
+        {:reply, {:ok, chunk}, touch(%{state | buffer: rest})}
 
       state.status in [:exited, :failed] ->
         {:reply, {:error, :closed}, state}
 
       true ->
-        {:noreply, %{state | waiters: [{:chunk, from} | state.waiters]}}
+        tref = Process.send_after(self(), {:waiter_timeout, from}, timeout)
+        waiter = {:chunk, from, tref}
+        {:noreply, touch(%{state | waiters: [waiter | state.waiters]})}
     end
   end
 
@@ -218,7 +297,7 @@ defmodule Hivefin.Playback.Session do
   def handle_info({port, {:data, data}}, %{port: port} = state) when is_binary(data) do
     state = %{state | buffer: state.buffer <> data}
     state = notify_waiters(state)
-    {:noreply, state}
+    {:noreply, touch(state)}
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
@@ -238,22 +317,65 @@ defmodule Hivefin.Playback.Session do
 
       true ->
         state = notify_waiters_closed(state)
-        # Keep GenServer alive briefly so clients can drain buffer / read info.
-        {:noreply, state}
+        # Keep GenServer alive so consumers can drain buffer; idle timer reaps.
+        {:noreply, schedule_idle(touch(state))}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    consumers = Map.delete(state.consumers, ref)
+    state = %{state | consumers: consumers}
+
+    state =
+      if map_size(consumers) == 0 do
+        schedule_idle(state)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:waiter_timeout, from}, state) do
+    {matching, rest} =
+      Enum.split_with(state.waiters, fn
+        {_kind, ^from, _tref} -> true
+        _ -> false
+      end)
+
+    Enum.each(matching, fn {_kind, f, tref} ->
+      Process.cancel_timer(tref)
+      GenServer.reply(f, {:error, :timeout})
+    end)
+
+    state = %{state | waiters: rest}
+
+    # No progress for this waiter — if nobody is attached, shut down so the
+    # concurrency slot is released.
+    state =
+      if map_size(state.consumers) == 0 and rest == [] do
+        {:stop, :timeout, state}
+      else
+        {:noreply, schedule_idle(state)}
+      end
+
+    state
+  end
+
+  def handle_info(:idle_timeout, state) do
+    if map_size(state.consumers) == 0 and state.waiters == [] do
+      Logger.debug("Playback session #{state.id} idle timeout; stopping")
+      {:stop, :normal, %{state | idle_timer: nil}}
+    else
+      {:noreply, schedule_idle(%{state | idle_timer: nil})}
     end
   end
 
   def handle_info(:poll_playlist, state) do
     cond do
       is_binary(state.playlist_path) and File.regular?(state.playlist_path) ->
-        {ready, rest} =
-          Enum.split_with(state.waiters, fn
-            {:ready, _} -> true
-            _ -> false
-          end)
-
-        Enum.each(ready, fn {:ready, from} -> GenServer.reply(from, {:ok, :hls}) end)
-        {:noreply, %{state | waiters: rest}}
+        state = reply_ready_waiters(state, :hls)
+        {:noreply, touch(state)}
 
       state.status in [:exited, :failed] ->
         {:noreply, notify_waiters_closed(state)}
@@ -268,6 +390,7 @@ defmodule Hivefin.Playback.Session do
 
   @impl true
   def terminate(_reason, state) do
+    reply_all_waiters(state, {:error, :closed})
     if state.port, do: Runner.kill(state.port)
     if state.os_pid, do: Runner.kill(state.os_pid)
     cleanup_temp(state.temp_dir)
@@ -301,7 +424,6 @@ defmodule Hivefin.Playback.Session do
 
     case open_port(state, args) do
       {:ok, state} ->
-        # Poll for playlist appearance (HLS writes files, little/no stdout).
         Process.send_after(self(), :poll_playlist, 100)
         {:ok, %{state | playlist_path: playlist}}
 
@@ -352,71 +474,108 @@ defmodule Hivefin.Playback.Session do
 
     case start_ffmpeg(state) do
       {:ok, state} ->
-        {:noreply, %{state | status: :running}}
+        {:noreply, touch(%{state | status: :running})}
 
       {:error, reason} ->
         state = %{state | status: :failed}
         state = reply_all_waiters(state, {:error, reason})
-        {:noreply, state}
+        {:noreply, schedule_idle(state)}
     end
   end
 
   defp notify_waiters(state) do
     {ready, rest} =
       Enum.split_with(state.waiters, fn
-        {:ready, _} -> true
+        {:ready, _, _} -> true
         _ -> false
       end)
 
-    Enum.each(ready, fn {:ready, from} ->
+    Enum.each(ready, fn {:ready, from, tref} ->
+      Process.cancel_timer(tref)
       GenServer.reply(from, {:ok, :pipe})
     end)
 
     {chunks, rest2} =
       Enum.split_with(rest, fn
-        {:chunk, _} -> true
+        {:chunk, _, _} -> true
         _ -> false
       end)
 
     {state, remaining_chunk_waiters} =
-      Enum.reduce(chunks, {state, []}, fn {:chunk, from}, {st, leftover} ->
+      Enum.reduce(chunks, {state, []}, fn {:chunk, from, tref}, {st, leftover} ->
         if byte_size(st.buffer) > 0 do
+          Process.cancel_timer(tref)
           {chunk, rest_buf} = take_chunk(st.buffer)
           GenServer.reply(from, {:ok, chunk})
           {%{st | buffer: rest_buf}, leftover}
         else
-          {st, [{:chunk, from} | leftover]}
+          {st, [{:chunk, from, tref} | leftover]}
         end
       end)
 
     %{state | waiters: remaining_chunk_waiters ++ rest2}
   end
 
-  defp notify_waiters_closed(state) do
-    Enum.each(state.waiters, fn
-      {:ready, from} ->
-        if byte_size(state.buffer) > 0 do
-          GenServer.reply(from, {:ok, :pipe})
-        else
-          GenServer.reply(from, {:error, :exited})
-        end
+  defp reply_ready_waiters(state, kind) do
+    {ready, rest} =
+      Enum.split_with(state.waiters, fn
+        {:ready, _, _} -> true
+        _ -> false
+      end)
 
-      {:chunk, from} ->
-        if byte_size(state.buffer) > 0 do
-          # Leave buffer for subsequent read_chunk calls; wake one waiter with data via notify
-          :ok
-        else
-          GenServer.reply(from, {:error, :closed})
-        end
+    Enum.each(ready, fn {:ready, from, tref} ->
+      Process.cancel_timer(tref)
+      GenServer.reply(from, {:ok, kind})
     end)
 
-    # Re-notify chunk waiters that can take remaining buffer
-    state = %{state | waiters: Enum.filter(state.waiters, &match?({:chunk, _}, &1))}
+    %{state | waiters: rest}
+  end
+
+  defp notify_waiters_closed(state) do
+    {with_data_chunks, closed} =
+      Enum.split_with(state.waiters, fn
+        {:chunk, _, _} -> byte_size(state.buffer) > 0
+        {:ready, _, _} -> byte_size(state.buffer) > 0
+        _ -> false
+      end)
+
+    # Ready waiters with buffered data succeed as pipe.
+    Enum.each(with_data_chunks, fn
+      {:ready, from, tref} ->
+        Process.cancel_timer(tref)
+        GenServer.reply(from, {:ok, :pipe})
+
+      {:chunk, _from, _tref} ->
+        :ok
+    end)
+
+    # Keep chunk waiters that can still drain buffer
+    chunk_waiters =
+      Enum.filter(with_data_chunks, fn
+        {:chunk, _, _} -> true
+        _ -> false
+      end)
+
+    Enum.each(closed, fn
+      {:ready, from, tref} ->
+        Process.cancel_timer(tref)
+        GenServer.reply(from, {:error, :exited})
+
+      {:chunk, from, tref} ->
+        Process.cancel_timer(tref)
+        GenServer.reply(from, {:error, :closed})
+    end)
+
+    state = %{state | waiters: chunk_waiters}
     notify_waiters(state)
   end
 
   defp reply_all_waiters(state, reply) do
-    Enum.each(state.waiters, fn {_, from} -> GenServer.reply(from, reply) end)
+    Enum.each(state.waiters, fn {_kind, from, tref} ->
+      Process.cancel_timer(tref)
+      GenServer.reply(from, reply)
+    end)
+
     %{state | waiters: []}
   end
 
@@ -428,11 +587,15 @@ defmodule Hivefin.Playback.Session do
   defp take_chunk(buffer), do: {buffer, <<>>}
 
   defp session_temp_dir(id) do
+    Path.join(transcode_base(), sanitize_id(id))
+  end
+
+  defp transcode_base do
     base =
       Application.get_env(:hivefin, :transcode_dir) ||
         Path.join(System.tmp_dir!(), "hivefin-transcode")
 
-    Path.join(base, sanitize_id(id))
+    Path.expand(base)
   end
 
   defp sanitize_id(id) do
@@ -444,13 +607,23 @@ defmodule Hivefin.Playback.Session do
   defp cleanup_temp(nil), do: :ok
 
   defp cleanup_temp(dir) when is_binary(dir) do
-    if String.contains?(dir, "hivefin") or String.contains?(dir, "transcode") do
-      File.rm_rf(dir)
+    base = transcode_base()
+    expanded = Path.expand(dir)
+
+    if under_base?(base, expanded) do
+      File.rm_rf(expanded)
+    else
+      Logger.warning("Refusing to delete temp dir outside transcode base: #{expanded}")
     end
 
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp under_base?(base, path) do
+    base = String.trim_trailing(base, "/")
+    path == base or String.starts_with?(path, base <> "/")
   end
 
   defp default_height(:transcode), do: 720
@@ -464,4 +637,41 @@ defmodule Hivefin.Playback.Session do
       _ -> true
     end
   end
+
+  defp idle_ms do
+    case Application.get_env(:hivefin, :session_idle_ms, @default_idle_ms) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_idle_ms
+    end
+  end
+
+  defp schedule_idle(state) do
+    state = cancel_idle(state)
+
+    if map_size(state.consumers) == 0 and state.waiters == [] do
+      tref = Process.send_after(self(), :idle_timeout, idle_ms())
+      %{state | idle_timer: tref}
+    else
+      state
+    end
+  end
+
+  defp cancel_idle(%{idle_timer: tref} = state) when is_reference(tref) do
+    Process.cancel_timer(tref)
+    %{state | idle_timer: nil}
+  end
+
+  defp cancel_idle(state), do: %{state | idle_timer: nil}
+
+  defp touch(state) do
+    state = %{state | last_activity_ms: now_ms()}
+    # Activity with consumers/waiters: no idle. Without them, reschedule.
+    if map_size(state.consumers) == 0 and state.waiters == [] do
+      schedule_idle(state)
+    else
+      cancel_idle(state)
+    end
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 end

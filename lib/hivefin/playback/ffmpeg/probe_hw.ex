@@ -57,11 +57,12 @@ defmodule Hivefin.Playback.FFmpeg.ProbeHw do
   - `:hw_accel` — `:auto | :videotoolbox | :nvenc | :vaapi | :none` (default `:auto`)
   - `:available` — optional availability map; defaults to `available/0`
   - `:prefer` — optional ordered list of HW encoders for `:auto`
+  - `:allow_cpu_fallback` — default `true`. When `false` and forced HW is
+    unavailable (or auto finds none), returns `{:error, :hw_unavailable}`.
 
-  Forced HW that is unavailable falls through to `:libx264`.
-  `:none` always returns `:libx264`.
+  Returns `{:ok, encoder}` or `{:error, :hw_unavailable}`.
   """
-  @spec pick(map() | keyword()) :: encoder()
+  @spec pick(map() | keyword()) :: {:ok, encoder()} | {:error, :hw_unavailable}
   def pick(config \\ %{})
 
   def pick(config) when is_list(config), do: pick(Map.new(config))
@@ -78,17 +79,36 @@ defmodule Hivefin.Playback.FFmpeg.ProbeHw do
       Map.get(config, :prefer) ||
         default_prefer_order()
 
+    allow_cpu =
+      case Map.get(config, :allow_cpu_fallback, Map.get(config, "allow_cpu_fallback", true)) do
+        false -> false
+        "false" -> false
+        "0" -> false
+        _ -> true
+      end
+
     case hw_accel do
       :none ->
-        :libx264
+        {:ok, :libx264}
 
       :auto ->
-        Enum.find_value(prefer, :libx264, fn enc ->
-          if Map.get(avail, enc, false), do: enc
-        end)
+        case Enum.find(prefer, fn enc -> Map.get(avail, enc, false) end) do
+          nil when allow_cpu -> {:ok, :libx264}
+          nil -> {:error, :hw_unavailable}
+          enc -> {:ok, enc}
+        end
 
       forced when forced in [:videotoolbox, :nvenc, :vaapi] ->
-        if Map.get(avail, forced, false), do: forced, else: :libx264
+        cond do
+          Map.get(avail, forced, false) ->
+            {:ok, forced}
+
+          allow_cpu ->
+            {:ok, :libx264}
+
+          true ->
+            {:error, :hw_unavailable}
+        end
     end
   end
 

@@ -121,6 +121,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   end
 
   defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
+    # v1: progressive MPEG-TS over HTTP (honest contract — not multi-segment HLS).
     url = transcode_url(item_id, source_id, token, session)
 
     Map.merge(base, %{
@@ -129,7 +130,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
-      "TranscodingSubProtocol" => "hls",
+      "TranscodingSubProtocol" => "http",
       "TranscodingContainer" => "ts",
       "IsRemote" => false
     })
@@ -146,7 +147,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   end
 
   defp transcode_url(item_id, source_id, token, session) do
-    "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}"
+    "/Videos/#{item_id}/stream.ts?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false&Transcode=true"
   end
 
   defp from_media_stream(%MediaStream{} = stream) do

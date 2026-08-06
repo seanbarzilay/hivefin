@@ -33,6 +33,7 @@ config :hivefin,
   max_transcodes: 2,
   hw_accel: :none,
   allow_cpu_fallback: true,
+  session_idle_ms: 60_000,
   transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode-test")
 
 # Print only warnings and errors during test

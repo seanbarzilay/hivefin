@@ -14,11 +14,11 @@ defmodule Hivefin.Playback.SessionTest do
       Session.stop(id)
     end
 
-    # Wait for children to clear
     wait_until(fn -> Supervisor.count_sessions() == 0 end, 2_000)
 
     previous_max = Application.get_env(:hivefin, :max_transcodes)
     previous_hw = Application.get_env(:hivefin, :hw_accel)
+    previous_idle = Application.get_env(:hivefin, :session_idle_ms)
 
     Application.put_env(:hivefin, :hw_accel, :none)
 
@@ -29,6 +29,7 @@ defmodule Hivefin.Playback.SessionTest do
 
       if previous_max, do: Application.put_env(:hivefin, :max_transcodes, previous_max)
       if previous_hw, do: Application.put_env(:hivefin, :hw_accel, previous_hw)
+      if previous_idle, do: Application.put_env(:hivefin, :session_idle_ms, previous_idle)
     end)
 
     :ok
@@ -46,6 +47,7 @@ defmodule Hivefin.Playback.SessionTest do
              })
 
     assert Process.alive?(pid)
+    :ok = Session.attach_consumer(pid, self())
     info = Session.info(pid)
     assert info.os_pid
     os_pid = info.os_pid
@@ -57,14 +59,17 @@ defmodule Hivefin.Playback.SessionTest do
     # MPEG-TS sync byte
     assert :binary.first(chunk) == 0x47 or byte_size(chunk) > 188
 
+    # stderr must not be mixed into media — no ffmpeg log text in TS body
+    refute chunk =~ "ffmpeg"
+    refute chunk =~ "Error"
+    refute chunk =~ "encoder"
+
     assert :ok = Session.stop(pid)
     refute Process.alive?(pid)
 
-    # FFmpeg OS process should be gone
     wait_until(fn -> not os_pid_alive?(os_pid) end, 3_000)
     refute os_pid_alive?(os_pid)
 
-    # Temp dir cleaned
     wait_until(fn -> not File.dir?(temp_dir) end, 2_000)
     refute File.dir?(temp_dir)
   end
@@ -82,7 +87,35 @@ defmodule Hivefin.Playback.SessionTest do
                height: 240
              })
 
+    Session.attach_consumer(pid, self())
     assert {:ok, :pipe} = Session.await_ready(pid, 20_000)
+    assert {:ok, chunk} = Session.read_chunk(pid, 15_000)
+    assert byte_size(chunk) > 100
+    refute chunk =~ "libx264"
+
+    info = Session.info(pid)
+    assert info.encoder == :libx264
+
+    Session.stop(pid)
+  end
+
+  @tag :ffmpeg
+  test "HW encoder failure falls back to libx264" do
+    id = "test-fallback-#{System.unique_integer([:positive])}"
+
+    # h264_nvenc fails quickly on hosts without NVIDIA; session must retry libx264.
+    assert {:ok, pid} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :transcode,
+               input_path: @fixture,
+               encoder: :nvenc,
+               height: 240,
+               allow_cpu_fallback: true
+             })
+
+    Session.attach_consumer(pid, self())
+    assert {:ok, :pipe} = Session.await_ready(pid, 25_000)
     assert {:ok, chunk} = Session.read_chunk(pid, 15_000)
     assert byte_size(chunk) > 100
 
@@ -113,7 +146,6 @@ defmodule Hivefin.Playback.SessionTest do
                input_path: @fixture
              })
 
-    # Same id is idempotent (not busy)
     assert {:ok, ^pid1} =
              Supervisor.start_session(%{
                id: id1,
@@ -132,6 +164,35 @@ defmodule Hivefin.Playback.SessionTest do
              })
 
     Session.stop(pid2)
+  end
+
+  @tag :ffmpeg
+  test "session idles out after consumers leave" do
+    Application.put_env(:hivefin, :session_idle_ms, 200)
+
+    id = "test-idle-#{System.unique_integer([:positive])}"
+
+    assert {:ok, pid} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :remux,
+               input_path: @fixture
+             })
+
+    consumer =
+      spawn(fn ->
+        Session.attach_consumer(pid, self())
+        receive do: (:go -> :ok)
+      end)
+
+    wait_until(fn -> Session.info(pid).consumers >= 1 end, 1_000)
+    send(consumer, :go)
+    wait_until(fn -> not Process.alive?(consumer) end, 1_000)
+
+    # Idle reap
+    wait_until(fn -> not Process.alive?(pid) end, 3_000)
+    refute Process.alive?(pid)
+    assert Supervisor.count_sessions() == 0
   end
 
   test "start_session rejects missing input" do

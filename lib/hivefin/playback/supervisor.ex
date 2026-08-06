@@ -1,28 +1,26 @@
 defmodule Hivefin.Playback.Supervisor do
   @moduledoc """
-  DynamicSupervisor for FFmpeg playback sessions plus concurrency gate.
+  Serializes FFmpeg session starts (atomic concurrency gate) and owns the
+  session DynamicSupervisor.
 
   `start_session/1` returns `{:error, :busy}` when active children reach
-  `:max_transcodes` (default 2).
+  `:max_transcodes` (default 2). Capacity check and child start happen in one
+  GenServer call so races cannot exceed the limit.
   """
 
-  use DynamicSupervisor
+  use GenServer
 
   alias Hivefin.Playback.Session
 
   @registry Hivefin.Playback.Registry
+  @session_sup Hivefin.Playback.SessionSupervisor
 
   def start_link(opts \\ []) do
-    DynamicSupervisor.start_link(__MODULE__, opts, name: __MODULE__)
-  end
-
-  @impl true
-  def init(_opts) do
-    DynamicSupervisor.init(strategy: :one_for_one, max_restarts: 30, max_seconds: 5)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
-  Starts a playback session.
+  Starts a playback session under the concurrency gate.
 
   ## attrs
   See `Hivefin.Playback.Session`. Requires `:id`, `:mode`, `:input_path`.
@@ -32,30 +30,7 @@ defmodule Hivefin.Playback.Supervisor do
   """
   @spec start_session(map()) :: {:ok, pid()} | {:error, :busy | term()}
   def start_session(attrs) when is_map(attrs) do
-    id = Map.fetch!(attrs, :id)
-
-    case lookup(id) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      :error ->
-        if at_capacity?() do
-          {:error, :busy}
-        else
-          child_spec = {Session, attrs}
-
-          case DynamicSupervisor.start_child(__MODULE__, child_spec) do
-            {:ok, pid} ->
-              {:ok, pid}
-
-            {:error, {:already_started, pid}} ->
-              {:ok, pid}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        end
-    end
+    GenServer.call(__MODULE__, {:start_session, attrs}, 30_000)
   end
 
   @doc """
@@ -82,7 +57,10 @@ defmodule Hivefin.Playback.Supervisor do
   """
   @spec count_sessions() :: non_neg_integer()
   def count_sessions do
-    DynamicSupervisor.count_children(__MODULE__).active
+    case Process.whereis(@session_sup) do
+      nil -> 0
+      _pid -> DynamicSupervisor.count_children(@session_sup).active
+    end
   end
 
   @doc """
@@ -105,7 +83,42 @@ defmodule Hivefin.Playback.Supervisor do
     end
   end
 
-  defp at_capacity? do
-    count_sessions() >= max_transcodes()
+  # GenServer
+
+  @impl true
+  def init(_opts) do
+    {:ok, _pid} =
+      DynamicSupervisor.start_link(
+        strategy: :one_for_one,
+        name: @session_sup,
+        max_restarts: 30,
+        max_seconds: 5
+      )
+
+    {:ok, %{}}
+  end
+
+  @impl true
+  def handle_call({:start_session, attrs}, _from, state) do
+    id = Map.fetch!(attrs, :id)
+
+    reply =
+      case lookup(id) do
+        {:ok, pid} ->
+          {:ok, pid}
+
+        :error ->
+          if count_sessions() >= max_transcodes() do
+            {:error, :busy}
+          else
+            case DynamicSupervisor.start_child(@session_sup, {Session, attrs}) do
+              {:ok, pid} -> {:ok, pid}
+              {:error, {:already_started, pid}} -> {:ok, pid}
+              {:error, reason} -> {:error, reason}
+            end
+          end
+      end
+
+    {:reply, reply, state}
   end
 end

@@ -7,8 +7,8 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   alias Hivefin.Playback.{Session, StreamToken, Supervisor}
 
   @doc """
-  Progressive DirectPlay stream with optional HTTP Range, or FFmpeg remux when
-  `Static=false`.
+  Progressive DirectPlay (`Static=true`), FFmpeg remux (`Static=false`), or
+  progressive transcode (`Static=false&Transcode=true`).
 
   Auth: stream token via `api_key` or `Tag` query params (not MediaBrowser header).
   """
@@ -19,10 +19,15 @@ defmodule HivefinWeb.Jellyfin.VideoController do
          true <- claims.item_id == item_id,
          true <- media_source_matches?(claims, params),
          {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
-      if static_request?(params) do
-        send_media_file(conn, path)
-      else
-        stream_remux(conn, path, params)
+      cond do
+        static_request?(params) ->
+          send_media_file(conn, path)
+
+        transcode_request?(params) ->
+          stream_ffmpeg(conn, path, params, :transcode)
+
+        true ->
+          stream_ffmpeg(conn, path, params, :remux)
       end
     else
       {:error, :expired} ->
@@ -46,8 +51,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   end
 
   @doc """
-  Starts (or reuses) a transcode session and returns an HLS media playlist.
+  Legacy path kept for older clients. Progressive MPEG-TS transcode (not HLS).
 
+  Prefer `TranscodingUrl` from PlaybackInfo (`stream.ts?...&Transcode=true`).
   Concurrent session limit exhausted → 503.
   """
   def master_m3u8(conn, %{"item_id" => item_id} = params) do
@@ -57,30 +63,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
          true <- claims.item_id == item_id,
          true <- media_source_matches?(claims, params),
          {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
-      session_id = play_session_id(params, claims)
-
-      case Supervisor.start_session(%{
-             id: session_id,
-             mode: :transcode,
-             input_path: path,
-             format: "mpegts",
-             height: height_from_params(params)
-           }) do
-        {:ok, pid} ->
-          stream_transcode_progressive(conn, pid)
-
-        {:error, :busy} ->
-          conn
-          |> put_status(:service_unavailable)
-          |> json(%{"error" => "too_many_transcodes", "message" => "Transcode capacity reached"})
-
-        {:error, reason} ->
-          Logger.warning("transcode session failed: #{inspect(reason)}")
-
-          conn
-          |> put_status(:internal_server_error)
-          |> json(%{"error" => "transcode_failed"})
-      end
+      stream_ffmpeg(conn, path, params, :transcode)
     else
       {:error, :expired} ->
         conn |> put_status(:unauthorized) |> json(%{"error" => "token_expired"})
@@ -102,14 +85,25 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
-  defp stream_remux(conn, path, params) do
-    session_id = play_session_id(params, %{})
+  defp stream_ffmpeg(conn, path, params, mode) when mode in [:remux, :transcode] do
+    session_id = play_session_id(params)
 
-    case Supervisor.start_session(%{
-           id: session_id,
-           mode: :remux,
-           input_path: path
-         }) do
+    attrs =
+      case mode do
+        :remux ->
+          %{id: session_id, mode: :remux, input_path: path}
+
+        :transcode ->
+          %{
+            id: session_id,
+            mode: :transcode,
+            input_path: path,
+            format: "mpegts",
+            height: height_from_params(params)
+          }
+      end
+
+    case Supervisor.start_session(attrs) do
       {:ok, pid} ->
         stream_pipe(conn, pid, "video/mp2t")
 
@@ -119,54 +113,56 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         |> json(%{"error" => "too_many_transcodes", "message" => "Transcode capacity reached"})
 
       {:error, reason} ->
-        Logger.warning("remux session failed: #{inspect(reason)}")
+        Logger.warning("#{mode} session failed: #{inspect(reason)}")
+        error_key = if mode == :remux, do: "remux_failed", else: "transcode_failed"
 
         conn
         |> put_status(:internal_server_error)
-        |> json(%{"error" => "remux_failed"})
+        |> json(%{"error" => error_key})
     end
   end
 
-  # Progressive MPEG-TS for master.m3u8 clients that accept HTTP progressive
-  # (v1); full multi-segment HLS can land when golden clients require it.
-  # Content-Type is still treated as a transport stream body.
-  defp stream_transcode_progressive(conn, pid) do
-    stream_pipe(conn, pid, "video/mp2t")
-  end
-
   defp stream_pipe(conn, pid, content_type) do
-    case Session.await_ready(pid, 15_000) do
-      {:ok, _} ->
-        conn =
-          conn
-          |> put_resp_content_type(content_type)
-          |> send_chunked(200)
+    Session.attach_consumer(pid, self())
 
-        pump_chunks(conn, pid)
-
-      {:error, reason} ->
-        Logger.warning("session not ready: #{inspect(reason)}")
-
-        # Session may still hold buffer on early exit; try one chunk.
-        case Session.read_chunk(pid, 500) do
-          {:ok, data} when byte_size(data) > 0 ->
-            conn =
-              conn
-              |> put_resp_content_type(content_type)
-              |> send_chunked(200)
-
-            case chunk(conn, data) do
-              {:ok, conn} -> pump_chunks(conn, pid)
-              {:error, _} -> conn
-            end
-
-          _ ->
-            _ = Session.stop(pid)
-
+    try do
+      case Session.await_ready(pid, 15_000) do
+        {:ok, _} ->
+          conn =
             conn
-            |> put_status(:internal_server_error)
-            |> json(%{"error" => "session_failed"})
-        end
+            |> put_resp_content_type(content_type)
+            |> send_chunked(200)
+
+          pump_chunks(conn, pid)
+
+        {:error, :timeout} ->
+          conn
+          |> put_status(:gateway_timeout)
+          |> json(%{"error" => "session_timeout"})
+
+        {:error, reason} ->
+          Logger.warning("session not ready: #{inspect(reason)}")
+
+          case Session.read_chunk(pid, 500) do
+            {:ok, data} when byte_size(data) > 0 ->
+              conn =
+                conn
+                |> put_resp_content_type(content_type)
+                |> send_chunked(200)
+
+              case chunk(conn, data) do
+                {:ok, conn} -> pump_chunks(conn, pid)
+                {:error, _} -> conn
+              end
+
+            _ ->
+              conn
+              |> put_status(:internal_server_error)
+              |> json(%{"error" => "session_failed"})
+          end
+      end
+    after
+      Session.stop(pid)
     end
   end
 
@@ -178,21 +174,21 @@ defmodule HivefinWeb.Jellyfin.VideoController do
             pump_chunks(conn, pid)
 
           {:error, :closed} ->
-            Session.stop(pid)
             conn
         end
 
       {:error, :closed} ->
-        Session.stop(pid)
+        conn
+
+      {:error, :timeout} ->
         conn
 
       {:error, _} ->
-        Session.stop(pid)
         conn
     end
   end
 
-  defp play_session_id(params, claims) do
+  defp play_session_id(params) do
     cond do
       is_binary(params["PlaySessionId"]) and params["PlaySessionId"] != "" ->
         params["PlaySessionId"]
@@ -201,10 +197,8 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         params["playSessionId"]
 
       true ->
-        # Stable-enough id for concurrent-limit tests when client omits PlaySessionId.
         base =
-          Map.get(claims, :media_source_id) ||
-            params["MediaSourceId"] ||
+          params["MediaSourceId"] ||
             params["mediaSourceId"] ||
             "anon"
 
@@ -236,11 +230,18 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   end
 
   # Static=true (default for DirectPlay URLs) serves the original file.
-  # Static=false is remux progressive MPEG-TS.
+  # Static=false is remux or transcode progressive MPEG-TS.
   defp static_request?(params) do
     case params["Static"] || params["static"] do
       v when v in [false, "false", "False", "0", 0] -> false
       _ -> true
+    end
+  end
+
+  defp transcode_request?(params) do
+    case params["Transcode"] || params["transcode"] do
+      v when v in [true, "true", "True", "1", 1] -> true
+      _ -> false
     end
   end
 

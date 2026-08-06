@@ -59,6 +59,13 @@ if fallback = System.get_env("HIVEFIN_ALLOW_CPU_FALLBACK") do
          fallback not in ["false", "0", "no", "FALSE", "No"]
 end
 
+if idle = System.get_env("HIVEFIN_SESSION_IDLE_MS") do
+  case Integer.parse(idle) do
+    {n, _} when n > 0 -> config :hivefin, :session_idle_ms, n
+    _ -> :ok
+  end
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

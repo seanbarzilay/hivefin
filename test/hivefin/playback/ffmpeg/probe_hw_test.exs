@@ -52,55 +52,82 @@ defmodule Hivefin.Playback.FFmpeg.ProbeHwTest do
 
   describe "pick/1" do
     test "auto prefers videotoolbox when available" do
-      assert ProbeHw.pick(%{
-               hw_accel: :auto,
-               available: %{videotoolbox: true, nvenc: true, vaapi: true}
-             }) == :videotoolbox
+      assert {:ok, :videotoolbox} =
+               ProbeHw.pick(%{
+                 hw_accel: :auto,
+                 available: %{videotoolbox: true, nvenc: true, vaapi: true}
+               })
     end
 
     test "auto falls through to nvenc then vaapi then libx264" do
-      assert ProbeHw.pick(%{
-               hw_accel: :auto,
-               available: %{videotoolbox: false, nvenc: true, vaapi: true}
-             }) == :nvenc
+      assert {:ok, :nvenc} =
+               ProbeHw.pick(%{
+                 hw_accel: :auto,
+                 available: %{videotoolbox: false, nvenc: true, vaapi: true}
+               })
 
-      assert ProbeHw.pick(%{
-               hw_accel: :auto,
-               available: %{videotoolbox: false, nvenc: false, vaapi: true}
-             }) == :vaapi
+      assert {:ok, :vaapi} =
+               ProbeHw.pick(%{
+                 hw_accel: :auto,
+                 available: %{videotoolbox: false, nvenc: false, vaapi: true}
+               })
 
-      assert ProbeHw.pick(%{
-               hw_accel: :auto,
-               available: %{videotoolbox: false, nvenc: false, vaapi: false}
-             }) == :libx264
+      assert {:ok, :libx264} =
+               ProbeHw.pick(%{
+                 hw_accel: :auto,
+                 available: %{videotoolbox: false, nvenc: false, vaapi: false}
+               })
     end
 
     test "none forces libx264" do
-      assert ProbeHw.pick(%{
-               hw_accel: :none,
-               available: %{videotoolbox: true, nvenc: true, vaapi: true}
-             }) == :libx264
+      assert {:ok, :libx264} =
+               ProbeHw.pick(%{
+                 hw_accel: :none,
+                 available: %{videotoolbox: true, nvenc: true, vaapi: true}
+               })
     end
 
     test "forced encoder used when available" do
-      assert ProbeHw.pick(%{
-               hw_accel: :nvenc,
-               available: %{videotoolbox: true, nvenc: true, vaapi: false}
-             }) == :nvenc
+      assert {:ok, :nvenc} =
+               ProbeHw.pick(%{
+                 hw_accel: :nvenc,
+                 available: %{videotoolbox: true, nvenc: true, vaapi: false}
+               })
     end
 
-    test "forced unavailable encoder falls back to libx264" do
-      assert ProbeHw.pick(%{
-               hw_accel: :vaapi,
-               available: %{videotoolbox: false, nvenc: false, vaapi: false}
-             }) == :libx264
+    test "forced unavailable encoder falls back to libx264 when allowed" do
+      assert {:ok, :libx264} =
+               ProbeHw.pick(%{
+                 hw_accel: :vaapi,
+                 available: %{videotoolbox: false, nvenc: false, vaapi: false},
+                 allow_cpu_fallback: true
+               })
+    end
+
+    test "forced unavailable encoder fails closed when CPU fallback disabled" do
+      assert {:error, :hw_unavailable} =
+               ProbeHw.pick(%{
+                 hw_accel: :nvenc,
+                 available: %{videotoolbox: false, nvenc: false, vaapi: false},
+                 allow_cpu_fallback: false
+               })
+    end
+
+    test "auto with no HW fails closed when CPU fallback disabled" do
+      assert {:error, :hw_unavailable} =
+               ProbeHw.pick(%{
+                 hw_accel: :auto,
+                 available: %{videotoolbox: false, nvenc: false, vaapi: false},
+                 allow_cpu_fallback: false
+               })
     end
 
     test "string config values normalize" do
-      assert ProbeHw.pick(%{
-               hw_accel: "none",
-               available: %{videotoolbox: true, nvenc: false, vaapi: false}
-             }) == :libx264
+      assert {:ok, :libx264} =
+               ProbeHw.pick(%{
+                 hw_accel: "none",
+                 available: %{videotoolbox: true, nvenc: false, vaapi: false}
+               })
     end
   end
 end

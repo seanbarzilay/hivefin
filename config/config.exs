@@ -15,6 +15,7 @@ config :hivefin,
   hw_accel: :auto,
   max_transcodes: 2,
   allow_cpu_fallback: true,
+  session_idle_ms: 60_000,
   transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode")
 
 # Configure the endpoint
