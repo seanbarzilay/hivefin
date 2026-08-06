@@ -27,4 +27,30 @@ defmodule Hivefin.AccountsTest do
     # second call is no-op when users already exist — same user count
     assert Accounts.count_users() == 1
   end
+
+  test "issue_token and get_user_by_token round-trip" do
+    {:ok, user} =
+      Accounts.create_user(%{
+        name: "Tok",
+        username: "tok",
+        password: "password1",
+        admin: false
+      })
+
+    assert {:ok, token, at} =
+             Accounts.issue_token(user, %{
+               device_id: "d1",
+               device_name: "Phone",
+               client: "App",
+               client_version: "1.2.3"
+             })
+
+    assert is_binary(token)
+    assert at.user_id == user.id
+    assert at.device_id == "d1"
+
+    found = Accounts.get_user_by_token(token)
+    assert found.id == user.id
+    assert Accounts.get_user_by_token("nope") == nil
+  end
 end
