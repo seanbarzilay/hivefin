@@ -186,4 +186,125 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     conn = get(build_conn(), ~p"/Users/#{user.id}/Views")
     assert json_response(conn, 401)
   end
+
+  describe "TV ParentId hierarchy" do
+    setup %{conn: conn, user: user} do
+      tv_path = Path.expand("test/support/fixtures/media_tree/tv", File.cwd!())
+
+      {:ok, library} =
+        LibraryContext.create_library(%{
+          name: "Shows",
+          type: :tv,
+          path: tv_path
+        })
+
+      {:ok, series, :created} =
+        LibraryContext.find_or_create_series(library.id, %{name: "Big Buck Bunny"})
+
+      {:ok, season, :created} =
+        LibraryContext.find_or_create_season(library.id, series.id, 1)
+
+      {:ok, episode, :created} =
+        LibraryContext.find_or_create_episode(library.id, season.id, %{
+          name: "Episode 2",
+          index_number: 2,
+          parent_index_number: 1
+        })
+
+      {:ok,
+       conn: conn,
+       user: user,
+       tv_library: library,
+       series: series,
+       season: season,
+       episode: episode}
+    end
+
+    test "library ParentId returns series", %{
+      conn: conn,
+      user: user,
+      tv_library: library,
+      series: series
+    } do
+      conn =
+        get(conn, ~p"/Users/#{user.id}/Items", %{
+          "ParentId" => library.id
+        })
+
+      assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
+      assert [item] = items
+      assert item["Id"] == series.id
+      assert item["Name"] == "Big Buck Bunny"
+      assert item["Type"] == "Series"
+      assert item["IsFolder"] == true
+      assert item["ParentId"] == library.id
+    end
+
+    test "series ParentId returns seasons", %{
+      conn: conn,
+      user: user,
+      series: series,
+      season: season
+    } do
+      conn =
+        get(conn, ~p"/Users/#{user.id}/Items", %{
+          "ParentId" => series.id
+        })
+
+      assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
+      assert [item] = items
+      assert item["Id"] == season.id
+      assert item["Type"] == "Season"
+      assert item["IndexNumber"] == 1
+      assert item["IsFolder"] == true
+      assert item["ParentId"] == series.id
+    end
+
+    test "season ParentId returns episodes", %{
+      conn: conn,
+      user: user,
+      season: season,
+      episode: episode
+    } do
+      conn =
+        get(conn, ~p"/Users/#{user.id}/Items", %{
+          "ParentId" => season.id
+        })
+
+      assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
+      assert [item] = items
+      assert item["Id"] == episode.id
+      assert item["Type"] == "Episode"
+      assert item["IndexNumber"] == 2
+      assert item["ParentIndexNumber"] == 1
+      assert item["IsFolder"] == false
+      assert item["ParentId"] == season.id
+    end
+
+    test "GET /Shows/:series_id/Seasons", %{
+      conn: conn,
+      series: series,
+      season: season
+    } do
+      conn = get(conn, ~p"/Shows/#{series.id}/Seasons")
+
+      assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
+      assert [item] = items
+      assert item["Id"] == season.id
+      assert item["Type"] == "Season"
+    end
+
+    test "GET /Shows/:series_id/Episodes", %{
+      conn: conn,
+      series: series,
+      episode: episode
+    } do
+      conn = get(conn, ~p"/Shows/#{series.id}/Episodes")
+
+      assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
+      assert [item] = items
+      assert item["Id"] == episode.id
+      assert item["Type"] == "Episode"
+    end
+  end
 end

@@ -18,7 +18,7 @@ defmodule Hivefin.Scanner do
 
   alias Hivefin.Library.{LibraryContext, ScanJob}
   alias Hivefin.Repo
-  alias Hivefin.Scanner.{MovieMatcher, PathRules, Walker}
+  alias Hivefin.Scanner.{MovieMatcher, PathRules, SeriesMatcher, Walker}
 
   @cancel_table :hivefin_scanner_cancel
   @task_supervisor Hivefin.Scanner.TaskSupervisor
@@ -202,8 +202,21 @@ defmodule Hivefin.Scanner do
             end
 
           :tv ->
-            finalize_job(job, :failed, 0, 0, "TV scanning not implemented yet")
-            {:error, :tv_not_implemented}
+            case scan_tv(library, cancel_fun) do
+              {:cancelled, found, added} ->
+                finalize_job(job, :cancelled, found, added, nil)
+                {:error, :cancelled}
+
+              {found, added} ->
+                if cancel_fun.() do
+                  finalize_job(job, :cancelled, found, added, nil)
+                  {:error, :cancelled}
+                else
+                  finalize_job(job, :completed, found, added, nil)
+                  LibraryContext.touch_library_scanned(library)
+                  :ok
+                end
+            end
         end
       rescue
         e ->
@@ -219,6 +232,14 @@ defmodule Hivefin.Scanner do
   end
 
   defp scan_movies(library, cancel_fun) do
+    scan_video_files(library, cancel_fun, &import_movie_file/3)
+  end
+
+  defp scan_tv(library, cancel_fun) do
+    scan_video_files(library, cancel_fun, &import_tv_file/3)
+  end
+
+  defp scan_video_files(library, cancel_fun, import_fun) do
     root = library.path
     videos = Walker.list_video_files(root)
 
@@ -231,7 +252,7 @@ defmodule Hivefin.Scanner do
       end
 
       if PathRules.under_root?(root, path) do
-        case import_movie_file(library, root, path) do
+        case import_fun.(library, root, path) do
           {:ok, :created} ->
             {found + 1, added + 1}
 
@@ -263,17 +284,48 @@ defmodule Hivefin.Scanner do
          # Probe only inside upsert when size/mtime require it
          {:ok, _source, source_status} <-
            LibraryContext.upsert_media_source(item.id, path, stat) do
-      status =
-        cond do
-          item_status == :created or source_status == :created -> :created
-          source_status == :updated -> :updated
-          true -> :unchanged
-        end
-
-      {:ok, status}
+      {:ok, import_status(item_status, source_status)}
     else
       {:error, reason} -> {:error, reason}
       false -> {:error, :outside_root}
+    end
+  end
+
+  defp import_tv_file(library, root, path) do
+    with {:ok, stat} <- File.stat(path),
+         true <- PathRules.under_root?(root, path) || {:error, :outside_root},
+         {:ok, identity} <- tv_identity(root, path),
+         {:ok, series, series_status} <-
+           LibraryContext.find_or_create_series(library.id, %{name: identity.series_name}),
+         {:ok, season, season_status} <-
+           LibraryContext.find_or_create_season(library.id, series.id, identity.season),
+         {:ok, episode, episode_status} <-
+           LibraryContext.find_or_create_episode(library.id, season.id, %{
+             name: identity.episode_name,
+             index_number: identity.episode,
+             parent_index_number: identity.season
+           }),
+         {:ok, _source, source_status} <-
+           LibraryContext.upsert_media_source(episode.id, path, stat) do
+      item_status =
+        if series_status == :created or season_status == :created or episode_status == :created do
+          :created
+        else
+          :existing
+        end
+
+      {:ok, import_status(item_status, source_status)}
+    else
+      {:error, reason} -> {:error, reason}
+      false -> {:error, :outside_root}
+    end
+  end
+
+  defp import_status(item_status, source_status) do
+    cond do
+      item_status == :created or source_status == :created -> :created
+      source_status == :updated -> :updated
+      true -> :unchanged
     end
   end
 
@@ -289,6 +341,63 @@ defmodule Hivefin.Scanner do
       end
 
     MovieMatcher.parse_name(label)
+  end
+
+  # Layouts:
+  # 1. Series Name/Season 01/Series Name S01E02.mkv
+  # 2. Series Name/Series Name S01E02.mkv  (season from filename)
+  defp tv_identity(root, path) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    rel = Path.relative_to(path, root)
+    parts = Path.split(rel)
+    filename = List.last(parts)
+
+    case SeriesMatcher.parse_filename(filename) do
+      %{episode: episode} = ep ->
+        with {:ok, series_name} <- series_name_from_parts(parts, filename),
+             {:ok, season} <- resolve_season(parts, ep) do
+          {:ok,
+           %{
+             series_name: series_name,
+             season: season,
+             episode: episode,
+             episode_name: "Episode #{episode}"
+           }}
+        end
+
+      nil ->
+        {:error, :unrecognized_episode_filename}
+    end
+  end
+
+  defp series_name_from_parts([series | rest], _filename) when rest != [] do
+    name =
+      series |> String.replace(~r/[._]+/, " ") |> String.replace(~r/\s+/, " ") |> String.trim()
+
+    if name == "" do
+      {:error, :missing_series_name}
+    else
+      {:ok, name}
+    end
+  end
+
+  defp series_name_from_parts(_parts, _filename), do: {:error, :missing_series_folder}
+
+  defp resolve_season(parts, %{season: season_from_file}) do
+    case parts do
+      [_series, season_folder, _file] ->
+        case SeriesMatcher.parse_season_folder(season_folder) do
+          n when is_integer(n) -> {:ok, n}
+          nil -> {:ok, season_from_file}
+        end
+
+      [_series, _file] ->
+        {:ok, season_from_file}
+
+      _ ->
+        {:ok, season_from_file}
+    end
   end
 
   defp finalize_job(job, status, found, added, error) do

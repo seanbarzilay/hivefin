@@ -29,6 +29,8 @@ defmodule HivefinWeb.Router do
     get "/Users/:user_id/Views", ItemsController, :views
     get "/Users/:user_id/Items", ItemsController, :index
     get "/Users/:user_id/Items/:item_id", ItemsController, :show
+    get "/Shows/:series_id/Seasons", ItemsController, :seasons
+    get "/Shows/:series_id/Episodes", ItemsController, :episodes
     get "/Items/:item_id/Images/:image_type", ImagesController, :show
   end
 

@@ -56,6 +56,41 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     end
   end
 
+  @doc """
+  Jellyfin `GET /Shows/:series_id/Seasons` — seasons under a series.
+  """
+  def seasons(conn, %{"series_id" => series_id} = params) do
+    opts =
+      browse_opts(params)
+      |> Keyword.put(:include_item_types, ["Season"])
+      |> Keyword.put(:recursive, false)
+
+    {entries, total} = LibraryContext.list_items_for_parent(series_id, opts)
+    fields = opts[:fields] || []
+    items = Enum.map(entries, &BaseItem.from_item(&1, fields: fields))
+    start_index = opts[:start_index] || 0
+    json(conn, BaseItem.query_result(items, total, start_index))
+  end
+
+  @doc """
+  Jellyfin `GET /Shows/:series_id/Episodes` — episodes under a series.
+  """
+  def episodes(conn, %{"series_id" => series_id} = params) do
+    opts = browse_opts(params)
+    fields = opts[:fields] || []
+    start_index = opts[:start_index] || 0
+
+    case LibraryContext.get_item(series_id) do
+      %Item{type: :series} = series ->
+        {entries, total} = LibraryContext.list_episodes_for_series(series, opts)
+        items = Enum.map(entries, &BaseItem.from_item(&1, fields: fields))
+        json(conn, BaseItem.query_result(items, total, start_index))
+
+      _ ->
+        json(conn, BaseItem.query_result([], 0, start_index))
+    end
+  end
+
   defp browse_opts(params) do
     fields = parse_fields(params["Fields"] || params["fields"])
 

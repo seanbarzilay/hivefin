@@ -136,6 +136,37 @@ defmodule Hivefin.Library.LibraryContext do
     |> Repo.one()
   end
 
+  @doc """
+  Lists episodes belonging to a series (via season parents).
+
+  Supports the same pagination/sort options as `list_items_for_parent/2`.
+  Returns `{entries, total_count}`.
+  """
+  def list_episodes_for_series(series, opts \\ [])
+
+  def list_episodes_for_series(%Item{type: :series, id: series_id}, opts) do
+    limit = clamp_non_neg(Keyword.get(opts, :limit))
+    start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
+    sort_by = normalize_sort_by(Keyword.get(opts, :sort_by))
+    preload_sources? = Keyword.get(opts, :preload_media_sources, false)
+
+    season_ids =
+      Item
+      |> where([i], i.parent_id == ^series_id and i.type == :season)
+      |> select([i], i.id)
+      |> Repo.all()
+
+    query =
+      Item
+      |> where([i], i.type == :episode and i.parent_id in ^season_ids)
+      |> apply_item_sort(sort_by)
+
+    # Empty IN list is fine in Ecto (returns no rows)
+    page_items(query, start_index, limit, preload_sources?)
+  end
+
+  def list_episodes_for_series(_, _opts), do: {[], 0}
+
   def list_media_sources(item_id) do
     MediaSource
     |> where([ms], ms.item_id == ^item_id)
@@ -213,6 +244,109 @@ defmodule Hivefin.Library.LibraryContext do
              |> Item.changeset(
                Map.merge(attrs, %{type: :movie, library_id: library_id, parent_id: nil})
              )
+             |> Repo.insert() do
+          {:ok, item} -> {:ok, item, :created}
+          error -> error
+        end
+    end
+  end
+
+  @doc """
+  Finds or creates a series (top-level TV item) by library + name.
+  """
+  def find_or_create_series(library_id, attrs) do
+    name = Map.fetch!(attrs, :name)
+
+    query =
+      Item
+      |> where(
+        [i],
+        i.library_id == ^library_id and i.type == :series and i.name == ^name and
+          is_nil(i.parent_id)
+      )
+
+    case Repo.one(query) do
+      %Item{} = item ->
+        {:ok, item, :existing}
+
+      nil ->
+        case %Item{}
+             |> Item.changeset(%{
+               type: :series,
+               library_id: library_id,
+               parent_id: nil,
+               name: name,
+               production_year: Map.get(attrs, :production_year)
+             })
+             |> Repo.insert() do
+          {:ok, item} -> {:ok, item, :created}
+          error -> error
+        end
+    end
+  end
+
+  @doc """
+  Finds or creates a season under a series by season index (`index_number`).
+  """
+  def find_or_create_season(library_id, series_id, season_number)
+      when is_integer(season_number) do
+    query =
+      Item
+      |> where(
+        [i],
+        i.library_id == ^library_id and i.type == :season and i.parent_id == ^series_id and
+          i.index_number == ^season_number
+      )
+
+    case Repo.one(query) do
+      %Item{} = item ->
+        {:ok, item, :existing}
+
+      nil ->
+        case %Item{}
+             |> Item.changeset(%{
+               type: :season,
+               library_id: library_id,
+               parent_id: series_id,
+               name: "Season #{season_number}",
+               index_number: season_number
+             })
+             |> Repo.insert() do
+          {:ok, item} -> {:ok, item, :created}
+          error -> error
+        end
+    end
+  end
+
+  @doc """
+  Finds or creates an episode under a season by episode index (`index_number`).
+  """
+  def find_or_create_episode(library_id, season_id, attrs) do
+    index = Map.fetch!(attrs, :index_number)
+    name = Map.get(attrs, :name) || "Episode #{index}"
+
+    query =
+      Item
+      |> where(
+        [i],
+        i.library_id == ^library_id and i.type == :episode and i.parent_id == ^season_id and
+          i.index_number == ^index
+      )
+
+    case Repo.one(query) do
+      %Item{} = item ->
+        {:ok, item, :existing}
+
+      nil ->
+        case %Item{}
+             |> Item.changeset(%{
+               type: :episode,
+               library_id: library_id,
+               parent_id: season_id,
+               name: name,
+               index_number: index,
+               parent_index_number: Map.get(attrs, :parent_index_number)
+             })
              |> Repo.insert() do
           {:ok, item} -> {:ok, item, :created}
           error -> error
