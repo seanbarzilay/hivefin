@@ -17,8 +17,10 @@ defmodule Hivefin.Metadata.RateLimiter do
   @doc """
   Blocks until a request token is available, then consumes one.
 
-  Returns `:ok`. Safe to call when the limiter is not started (no-op).
+  Returns `:ok` on success, or `:error` if the call exits (timeout / death).
+  When the limiter process is not started (`whereis` nil), returns `:ok` (no-op).
   """
+  @spec checkout(GenServer.server()) :: :ok | :error
   def checkout(server \\ @name) do
     case Process.whereis(server) do
       nil ->
@@ -28,8 +30,8 @@ defmodule Hivefin.Metadata.RateLimiter do
         try do
           GenServer.call(server, :checkout, 30_000)
         catch
-          # Timeout or server death must not crash metadata Tasks
-          :exit, _reason -> :ok
+          # Fail-closed: do not allow HTTP when the limiter cannot grant a token
+          :exit, _reason -> :error
         end
     end
   end

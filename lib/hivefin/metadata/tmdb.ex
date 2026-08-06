@@ -89,8 +89,13 @@ defmodule Hivefin.Metadata.TMDB do
         {:error, :missing_api_key}
 
       key ->
-        RateLimiter.checkout()
-        do_get(path, Map.put(params, "api_key", key))
+        case RateLimiter.checkout() do
+          :ok ->
+            do_get(path, Map.put(params, "api_key", key))
+
+          :error ->
+            {:error, :rate_limited}
+        end
     end
   end
 
