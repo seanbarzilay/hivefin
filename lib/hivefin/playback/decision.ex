@@ -5,13 +5,13 @@ defmodule Hivefin.Playback.Decision do
 
   ## v1 heuristics
 
-  1. If container is in the profile's direct-play containers **and** primary
-     video/audio codecs are allowed → `:direct_play`
+  1. If container is allowed **and** primary video/audio codecs are allowed →
+     `:direct_play`
   2. Else if codecs are allowed but container is not → `:direct_stream` (remux)
   3. Else → `:transcode`
 
-  Missing video/audio streams are treated as "no restriction" for that type
-  (still need a container for direct play).
+  Empty allow-lists mean **any** (Jellyfin DirectPlayProfile semantics).
+  Missing video/audio streams are treated as "no restriction" for that type.
   """
 
   alias Hivefin.Library.MediaSource
@@ -175,15 +175,17 @@ defmodule Hivefin.Playback.Decision do
 
   defp stream_type(_), do: nil
 
+  # Empty allow-list = any container (including unknown/nil).
+  defp container_allowed?(_container, []), do: true
   defp container_allowed?(nil, _allowed), do: false
 
   defp container_allowed?(container, allowed) do
     container = String.downcase(container)
-    # Containers may be multi-part (e.g. "mp4,m4v" already split by DeviceProfile)
     Enum.any?(allowed, fn a -> a == container end)
   end
 
   # nil codec = unknown/missing → allow (e.g. audio-less clips)
+  # empty allow-list = any codec
   defp codec_allowed?(nil, _allowed), do: true
   defp codec_allowed?(_codec, []), do: true
 

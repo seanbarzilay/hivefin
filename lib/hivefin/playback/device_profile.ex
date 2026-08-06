@@ -69,12 +69,12 @@ defmodule Hivefin.Playback.DeviceProfile do
         |> Enum.flat_map(&split_list(get_key(&1, ["AudioCodec", "audioCodec", :AudioCodec])))
         |> normalize_list()
 
-      # Empty codec lists mean "any" in Jellyfin DirectPlayProfiles.
+      # Empty lists mean "any" in Jellyfin DirectPlayProfiles — keep them empty.
+      # Decision treats [] for containers/codecs as allow-all.
       %{
-        direct_play_containers:
-          if(containers == [], do: default().direct_play_containers, else: containers),
-        video_codecs: if(video_codecs == [], do: default().video_codecs, else: video_codecs),
-        audio_codecs: if(audio_codecs == [], do: default().audio_codecs, else: audio_codecs)
+        direct_play_containers: containers,
+        video_codecs: video_codecs,
+        audio_codecs: audio_codecs
       }
     end
   end

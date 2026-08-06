@@ -56,4 +56,32 @@ defmodule Hivefin.Playback.DecisionTest do
     profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
     assert {:direct_play, _} = Decision.choose(source, profile)
   end
+
+  test "empty codec allow-lists mean any codec" do
+    source = %{container: "mp4", video_codec: "hevc", audio_codec: "dts"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: [], audio_codecs: []}
+    assert {:direct_play, _} = Decision.choose(source, profile)
+  end
+
+  test "empty container allow-list means any container" do
+    source = %{container: "mkv", video_codec: "h264", audio_codec: "aac"}
+    profile = %{direct_play_containers: [], video_codecs: ["h264"], audio_codecs: ["aac"]}
+    assert {:direct_play, _} = Decision.choose(source, profile)
+  end
+
+  test "DeviceProfile keeps empty codec lists as allow-all (does not substitute defaults)" do
+    profile =
+      DeviceProfile.from_jellyfin(%{
+        "DirectPlayProfiles" => [
+          %{"Container" => "mp4", "Type" => "Video"}
+        ]
+      })
+
+    assert profile.direct_play_containers == ["mp4"]
+    assert profile.video_codecs == []
+    assert profile.audio_codecs == []
+
+    source = %{container: "mp4", video_codec: "vp9", audio_codec: "opus"}
+    assert {:direct_play, _} = Decision.choose(source, profile)
+  end
 end

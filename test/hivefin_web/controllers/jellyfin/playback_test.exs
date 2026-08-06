@@ -133,6 +133,26 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert binary_part(body, 4, 4) == "ftyp"
   end
 
+  test "GET stream accepts video/* Accept header (not JSON-only pipeline)", %{
+    movie: movie,
+    source: source,
+    user: user
+  } do
+    token = StreamToken.sign(user.id, movie.id, source.id)
+
+    conn =
+      build_conn()
+      |> put_req_header("accept", "video/mp4, video/*, */*")
+      |> get(~p"/Videos/#{movie.id}/stream", %{
+        "MediaSourceId" => source.id,
+        "api_key" => token
+      })
+
+    # Would be 406 if stuck behind accepts: ["json"] only
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["video/mp4"]
+  end
+
   test "GET stream supports Range requests", %{movie: movie, source: source, user: user} do
     token = StreamToken.sign(user.id, movie.id, source.id)
     expected_size = File.stat!(@fixture_mp4).size
