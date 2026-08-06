@@ -43,10 +43,15 @@ defmodule HivefinWeb.Router do
     get "/Users/:user_id/Views", ItemsController, :views
     get "/Users/:user_id/Items", ItemsController, :index
     get "/Users/:user_id/Items/:item_id", ItemsController, :show
+    post "/Users/:user_id/Items/:item_id/UserData", SessionsController, :update_user_data
+    post "/Users/:user_id/PlayedItems/:item_id", SessionsController, :mark_played
     get "/Shows/:series_id/Seasons", ItemsController, :seasons
     get "/Shows/:series_id/Episodes", ItemsController, :episodes
     get "/Items/:item_id/Images/:image_type", ImagesController, :show
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
+    post "/Sessions/Playing", SessionsController, :playing
+    post "/Sessions/Playing/Progress", SessionsController, :progress
+    post "/Sessions/Playing/Stopped", SessionsController, :stopped
   end
 
   scope "/api", HivefinWeb do

@@ -5,8 +5,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   Absolute filesystem paths are never included in responses.
   """
 
+  alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
   alias Hivefin.Jellyfin.SystemInfo
-  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream}
+  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, UserData}
 
   @type field_opt :: String.t() | atom()
 
@@ -182,18 +183,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   defp season_id(%Item{type: :episode, parent_id: parent_id}), do: parent_id
   defp season_id(_), do: nil
 
-  defp user_data(nil), do: default_user_data()
-  defp user_data(%{} = data), do: Map.merge(default_user_data(), stringify_keys(data))
-
-  defp default_user_data do
-    %{
-      "PlaybackPositionTicks" => 0,
-      "PlayCount" => 0,
-      "IsFavorite" => false,
-      "Played" => false,
-      "PlayedPercentage" => 0
-    }
-  end
+  defp user_data(nil), do: UserDataDto.default()
+  defp user_data(%UserData{} = data), do: UserDataDto.from_user_data(data)
+  defp user_data(%{} = data), do: UserDataDto.from_user_data(data)
 
   defp premiere_date(%Date{} = date), do: Date.to_iso8601(date)
   defp premiere_date(_), do: nil
@@ -211,13 +203,6 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   defp normalize_fields(_), do: []
 
   defp include_field?(fields, name), do: name in fields
-
-  defp stringify_keys(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k) |> Macro.camelize(), v}
-      {k, v} when is_binary(k) -> {k, v}
-    end)
-  end
 
   defp drop_nils(map) do
     map

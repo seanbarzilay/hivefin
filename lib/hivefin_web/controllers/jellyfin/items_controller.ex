@@ -2,7 +2,8 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
   use HivefinWeb, :controller
 
   alias Hivefin.Jellyfin.Dto.BaseItem
-  alias Hivefin.Library.{Item, Library, LibraryContext}
+  alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
+  alias Hivefin.Library.{Item, Library, LibraryContext, UserData}
 
   def views(conn, _params) do
     libraries = LibraryContext.list_libraries()
@@ -16,11 +17,15 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     opts = browse_opts(params)
     {entries, total} = LibraryContext.list_items_for_parent(parent_id, opts)
     fields = opts[:fields] || []
+    user_data_map = user_data_map_for(conn, entries)
 
     items =
       Enum.map(entries, fn
-        %Library{} = library -> BaseItem.from_library(library)
-        %Item{} = item -> BaseItem.from_item(item, fields: fields)
+        %Library{} = library ->
+          BaseItem.from_library(library)
+
+        %Item{} = item ->
+          BaseItem.from_item(item, fields: fields, user_data: user_data_for(item, user_data_map))
       end)
 
     start_index = opts[:start_index] || 0
@@ -40,7 +45,8 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
     case item do
       %Item{} = item ->
-        json(conn, BaseItem.from_item(item, fields: fields))
+        user_data = load_user_data(conn, item.id)
+        json(conn, BaseItem.from_item(item, fields: fields, user_data: user_data))
 
       nil ->
         # Libraries can also be opened as items (view folders)
@@ -67,7 +73,13 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
     {entries, total} = LibraryContext.list_items_for_parent(series_id, opts)
     fields = opts[:fields] || []
-    items = Enum.map(entries, &BaseItem.from_item(&1, fields: fields))
+    user_data_map = user_data_map_for(conn, entries)
+
+    items =
+      Enum.map(entries, fn item ->
+        BaseItem.from_item(item, fields: fields, user_data: user_data_for(item, user_data_map))
+      end)
+
     start_index = opts[:start_index] || 0
     json(conn, BaseItem.query_result(items, total, start_index))
   end
@@ -83,11 +95,42 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     case LibraryContext.get_item(series_id) do
       %Item{type: :series} = series ->
         {entries, total} = LibraryContext.list_episodes_for_series(series, opts)
-        items = Enum.map(entries, &BaseItem.from_item(&1, fields: fields))
+        user_data_map = user_data_map_for(conn, entries)
+
+        items =
+          Enum.map(entries, fn item ->
+            BaseItem.from_item(item,
+              fields: fields,
+              user_data: user_data_for(item, user_data_map)
+            )
+          end)
+
         json(conn, BaseItem.query_result(items, total, start_index))
 
       _ ->
         json(conn, BaseItem.query_result([], 0, start_index))
+    end
+  end
+
+  defp user_data_map_for(conn, entries) do
+    user = conn.assigns[:current_user]
+    item_ids = for %Item{id: id} <- entries, do: id
+
+    if user && item_ids != [] do
+      UserData.map_for_items(user.id, item_ids)
+    else
+      %{}
+    end
+  end
+
+  defp user_data_for(%Item{id: id}, map) do
+    UserDataDto.from_user_data(Map.get(map, id))
+  end
+
+  defp load_user_data(conn, item_id) do
+    case conn.assigns[:current_user] do
+      %{id: user_id} -> UserDataDto.from_user_data(UserData.get(user_id, item_id))
+      _ -> UserDataDto.default()
     end
   end
 
