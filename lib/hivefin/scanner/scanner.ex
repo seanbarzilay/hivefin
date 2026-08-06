@@ -4,15 +4,24 @@ defmodule Hivefin.Scanner do
 
   Production API is asynchronous (`scan_library/1`); tests may use
   `scan_library_sync/1` which runs the pipeline in the calling process.
+
+  Cancel is cooperative via an ETS flag (workers never `GenServer.call` the
+  scanner). Hard cancel also terminates the scan task. Orphaned `:running`
+  scan jobs are marked `:failed` on scanner init (e.g. after crash/restart).
   """
 
   use GenServer
 
   require Logger
 
-  alias Hivefin.Library.LibraryContext
-  alias Hivefin.MediaInfo.Prober
+  import Ecto.Query
+
+  alias Hivefin.Library.{LibraryContext, ScanJob}
+  alias Hivefin.Repo
   alias Hivefin.Scanner.{MovieMatcher, PathRules, Walker}
+
+  @cancel_table :hivefin_scanner_cancel
+  @task_supervisor Hivefin.Scanner.TaskSupervisor
 
   defstruct running: %{}
 
@@ -53,10 +62,22 @@ defmodule Hivefin.Scanner do
     end
   end
 
+  @doc false
+  def cancelled?(library_id) do
+    case :ets.lookup(@cancel_table, library_id) do
+      [{^library_id, true}] -> true
+      _ -> false
+    end
+  end
+
   # —— GenServer ——
 
   @impl true
-  def init(state), do: {:ok, state}
+  def init(state) do
+    ensure_cancel_table!()
+    fail_orphaned_scan_jobs()
+    {:ok, state}
+  end
 
   @impl true
   def handle_call({:scan_library, library_id}, _from, state) do
@@ -68,22 +89,23 @@ defmodule Hivefin.Scanner do
         {:reply, {:error, :not_found}, state}
 
       true ->
-        parent = self()
         library = LibraryContext.get_library!(library_id)
+        clear_cancel_flag(library_id)
 
         {:ok, job} =
           LibraryContext.create_scan_job(%{
             library_id: library_id,
             status: :running,
-            started_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+            started_at: now(),
             items_found: 0,
             items_added: 0
           })
 
         task =
-          Task.async(fn ->
-            result = do_scan_library(library, job, fn -> cancelled?(parent, library_id) end)
-            {:scan_done, library_id, result}
+          Task.Supervisor.async_nolink(@task_supervisor, fn ->
+            allow_repo_sandbox()
+            result = do_scan_library(library, job, fn -> cancelled?(library_id) end)
+            {:scan_done, library_id, job.id, result}
           end)
 
         running = Map.put(state.running, library_id, %{task: task, job: job})
@@ -92,48 +114,39 @@ defmodule Hivefin.Scanner do
   end
 
   def handle_call({:cancel, library_id}, _from, state) do
-    case Map.get(state.running, library_id) do
-      nil ->
+    case Map.pop(state.running, library_id) do
+      {nil, _} ->
         {:reply, :ok, state}
 
-      %{task: task, job: job} ->
-        Task.shutdown(task, :brutal_kill)
-
-        LibraryContext.update_scan_job(job, %{
-          status: :cancelled,
-          finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
-        })
-
-        {:reply, :ok, %{state | running: Map.delete(state.running, library_id)}}
+      {%{task: task, job: job}, running} ->
+        set_cancel_flag(library_id)
+        _ = Task.shutdown(task, :brutal_kill)
+        mark_job_cancelled_if_running(job)
+        clear_cancel_flag(library_id)
+        {:reply, :ok, %{state | running: running}}
     end
   end
 
-  def handle_call({:cancelled?, library_id}, _from, state) do
-    {:reply, not Map.has_key?(state.running, library_id), state}
-  end
-
   @impl true
-  def handle_info({ref, {:scan_done, library_id, result}}, state) when is_reference(ref) do
+  def handle_info({ref, {:scan_done, library_id, _job_id, _result}}, state)
+      when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    state = finish_running(state, library_id, result)
-    {:noreply, state}
+    clear_cancel_flag(library_id)
+    {:noreply, %{state | running: Map.delete(state.running, library_id)}}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     entry =
-      Enum.find(state.running, fn {_id, %{task: task}} -> task.ref == ref end)
+      Enum.find(state.running, fn {_id, %{task: %Task{ref: task_ref}}} -> task_ref == ref end)
 
     state =
       case entry do
         {library_id, %{job: job}} ->
-          if reason != :normal do
-            LibraryContext.update_scan_job(job, %{
-              status: :failed,
-              error: inspect(reason),
-              finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
-            })
+          if reason not in [:normal, :noproc] do
+            mark_job_failed_if_running(job, inspect(reason))
           end
 
+          clear_cancel_flag(library_id)
           %{state | running: Map.delete(state.running, library_id)}
 
         nil ->
@@ -145,29 +158,21 @@ defmodule Hivefin.Scanner do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp finish_running(state, library_id, _result) do
-    %{state | running: Map.delete(state.running, library_id)}
-  end
-
-  defp cancelled?(parent, library_id) do
-    GenServer.call(parent, {:cancelled?, library_id})
-  rescue
-    _ -> true
-  end
-
   # —— Scan pipeline ——
 
   defp run_scan(library) do
+    clear_cancel_flag(library.id)
+
     {:ok, job} =
       LibraryContext.create_scan_job(%{
         library_id: library.id,
         status: :running,
-        started_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+        started_at: now(),
         items_found: 0,
         items_added: 0
       })
 
-    do_scan_library(library, job, fn -> false end)
+    do_scan_library(library, job, fn -> cancelled?(library.id) end)
   end
 
   defp do_scan_library(library, job, cancel_fun) do
@@ -176,12 +181,25 @@ defmodule Hivefin.Scanner do
       {:error, :cancelled}
     else
       try do
+        maybe_test_delay()
+
         case library.type do
           :movies ->
-            {found, added} = scan_movies(library, cancel_fun)
-            finalize_job(job, :completed, found, added, nil)
-            LibraryContext.touch_library_scanned(library)
-            :ok
+            case scan_movies(library, cancel_fun) do
+              {:cancelled, found, added} ->
+                finalize_job(job, :cancelled, found, added, nil)
+                {:error, :cancelled}
+
+              {found, added} ->
+                if cancel_fun.() do
+                  finalize_job(job, :cancelled, found, added, nil)
+                  {:error, :cancelled}
+                else
+                  finalize_job(job, :completed, found, added, nil)
+                  LibraryContext.touch_library_scanned(library)
+                  :ok
+                end
+            end
 
           :tv ->
             finalize_job(job, :failed, 0, 0, "TV scanning not implemented yet")
@@ -202,10 +220,12 @@ defmodule Hivefin.Scanner do
 
   defp scan_movies(library, cancel_fun) do
     root = library.path
-
     videos = Walker.list_video_files(root)
 
     Enum.reduce(videos, {0, 0}, fn path, {found, added} ->
+      maybe_test_hook(library.id)
+      maybe_test_delay()
+
       if cancel_fun.() do
         throw({:cancelled, found, added})
       end
@@ -228,7 +248,7 @@ defmodule Hivefin.Scanner do
       end
     end)
   catch
-    {:cancelled, found, added} -> {found, added}
+    {:cancelled, found, added} -> {:cancelled, found, added}
   end
 
   defp import_movie_file(library, root, path) do
@@ -240,9 +260,9 @@ defmodule Hivefin.Scanner do
              name: parsed.name,
              production_year: parsed.year
            }),
-         probe <- probe_or_empty(path),
+         # Probe only inside upsert when size/mtime require it
          {:ok, _source, source_status} <-
-           LibraryContext.upsert_media_source(item.id, path, stat, probe) do
+           LibraryContext.upsert_media_source(item.id, path, stat) do
       status =
         cond do
           item_status == :created or source_status == :created -> :created
@@ -271,24 +291,113 @@ defmodule Hivefin.Scanner do
     MovieMatcher.parse_name(label)
   end
 
-  defp probe_or_empty(path) do
-    case Prober.probe(path) do
-      {:ok, result} ->
-        result
+  defp finalize_job(job, status, found, added, error) do
+    # Avoid clobbering a terminal status set by cancel/DOWN races.
+    case Repo.get(ScanJob, job.id) do
+      %ScanJob{status: :running} = current ->
+        LibraryContext.update_scan_job(current, %{
+          status: status,
+          items_found: found,
+          items_added: added,
+          error: error,
+          finished_at: now()
+        })
 
-      {:error, reason} ->
-        Logger.warning("ffprobe failed for #{path}: #{inspect(reason)}")
-        %{format: %{}, streams: []}
+      _ ->
+        :ok
     end
   end
 
-  defp finalize_job(job, status, found, added, error) do
-    LibraryContext.update_scan_job(job, %{
-      status: status,
-      items_found: found,
-      items_added: added,
-      error: error,
-      finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    })
+  defp mark_job_cancelled_if_running(job) do
+    case Repo.get(ScanJob, job.id) do
+      %ScanJob{status: :running} = current ->
+        LibraryContext.update_scan_job(current, %{
+          status: :cancelled,
+          finished_at: now()
+        })
+
+      _ ->
+        :ok
+    end
   end
+
+  defp mark_job_failed_if_running(job, error) do
+    case Repo.get(ScanJob, job.id) do
+      %ScanJob{status: :running} = current ->
+        LibraryContext.update_scan_job(current, %{
+          status: :failed,
+          error: error,
+          finished_at: now()
+        })
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp fail_orphaned_scan_jobs do
+    now = now()
+
+    {count, _} =
+      from(j in ScanJob, where: j.status == :running)
+      |> Repo.update_all(
+        set: [
+          status: "failed",
+          error: "scanner restarted with job still running",
+          finished_at: now
+        ]
+      )
+
+    if count > 0 do
+      Logger.warning("marked #{count} orphaned scan job(s) as failed")
+    end
+  rescue
+    e ->
+      Logger.warning("could not fail orphaned scan jobs: #{Exception.message(e)}")
+  end
+
+  defp ensure_cancel_table! do
+    case :ets.whereis(@cancel_table) do
+      :undefined ->
+        :ets.new(@cancel_table, [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      _tid ->
+        @cancel_table
+    end
+  end
+
+  defp set_cancel_flag(library_id), do: :ets.insert(@cancel_table, {library_id, true})
+  defp clear_cancel_flag(library_id), do: :ets.delete(@cancel_table, library_id)
+
+  defp allow_repo_sandbox do
+    case Application.get_env(:hivefin, :scanner_repo_owner) do
+      owner when is_pid(owner) ->
+        Ecto.Adapters.SQL.Sandbox.allow(Repo, owner, self())
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_test_delay do
+    case Application.get_env(:hivefin, :scanner_test_delay_ms) do
+      ms when is_integer(ms) and ms > 0 -> Process.sleep(ms)
+      _ -> :ok
+    end
+  end
+
+  defp maybe_test_hook(library_id) do
+    case Application.get_env(:hivefin, :scanner_test_hook) do
+      fun when is_function(fun, 1) -> fun.(library_id)
+      _ -> :ok
+    end
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

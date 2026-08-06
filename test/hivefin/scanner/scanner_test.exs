@@ -2,10 +2,30 @@ defmodule Hivefin.Scanner.ScannerTest do
   use Hivefin.DataCase, async: false
 
   alias Hivefin.Library.LibraryContext
+  alias Hivefin.Library.MediaStream
+  alias Hivefin.Repo
   alias Hivefin.Scanner
   alias Hivefin.Scanner.PathRules
 
   @movies_path Path.expand("test/support/fixtures/media_tree/movies", File.cwd!())
+
+  setup do
+    owner = self()
+    Application.put_env(:hivefin, :scanner_repo_owner, owner)
+    Application.delete_env(:hivefin, :scanner_test_delay_ms)
+    Application.delete_env(:hivefin, :scanner_test_hook)
+
+    scanner = Process.whereis(Hivefin.Scanner)
+    if scanner, do: Ecto.Adapters.SQL.Sandbox.allow(Repo, owner, scanner)
+
+    on_exit(fn ->
+      Application.delete_env(:hivefin, :scanner_repo_owner)
+      Application.delete_env(:hivefin, :scanner_test_delay_ms)
+      Application.delete_env(:hivefin, :scanner_test_hook)
+    end)
+
+    :ok
+  end
 
   test "scan imports movie and media source" do
     {:ok, lib} =
@@ -19,12 +39,16 @@ defmodule Hivefin.Scanner.ScannerTest do
     assert hd(items).production_year == 2008
     assert is_nil(hd(items).parent_id)
 
-    assert [%{path: p}] = LibraryContext.list_media_sources(hd(items).id)
+    assert [%{path: p} = source] = LibraryContext.list_media_sources(hd(items).id)
     assert File.exists?(p)
     assert PathRules.under_root?(lib.path, p)
+    assert source.media_streams != []
 
     lib = LibraryContext.get_library!(lib.id)
     assert lib.last_scanned_at
+
+    job = LibraryContext.get_latest_scan_job(lib.id)
+    assert job.status == :completed
   end
 
   test "scan is idempotent for unchanged files" do
@@ -37,6 +61,65 @@ defmodule Hivefin.Scanner.ScannerTest do
     items = LibraryContext.list_items(lib.id, type: :movie)
     assert length(items) == 1
     assert length(LibraryContext.list_media_sources(hd(items).id)) == 1
+  end
+
+  test "unchanged rescan does not require ffprobe" do
+    {:ok, lib} =
+      LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
+
+    assert :ok = Scanner.scan_library_sync(lib.id)
+
+    old = Application.get_env(:hivefin, :ffprobe_path)
+
+    Application.put_env(
+      :hivefin,
+      :ffprobe_path,
+      "/nonexistent/ffprobe-#{System.unique_integer()}"
+    )
+
+    on_exit(fn -> Application.put_env(:hivefin, :ffprobe_path, old) end)
+
+    assert :ok = Scanner.scan_library_sync(lib.id)
+
+    [%{media_streams: streams}] =
+      LibraryContext.list_media_sources(hd(LibraryContext.list_items(lib.id)).id)
+
+    assert streams != []
+  end
+
+  test "keeps existing streams when re-probe fails after size change" do
+    {:ok, lib} =
+      LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
+
+    assert :ok = Scanner.scan_library_sync(lib.id)
+
+    item = hd(LibraryContext.list_items(lib.id, type: :movie))
+    [source] = LibraryContext.list_media_sources(item.id)
+    stream_count = length(source.media_streams)
+    assert stream_count > 0
+
+    # Force "changed" without replacing the real file
+    source
+    |> Ecto.Changeset.change(size: 1)
+    |> Repo.update!()
+
+    old = Application.get_env(:hivefin, :ffprobe_path)
+
+    Application.put_env(
+      :hivefin,
+      :ffprobe_path,
+      "/nonexistent/ffprobe-#{System.unique_integer()}"
+    )
+
+    on_exit(fn -> Application.put_env(:hivefin, :ffprobe_path, old) end)
+
+    assert :ok = Scanner.scan_library_sync(lib.id)
+
+    [source_after] = LibraryContext.list_media_sources(item.id)
+    assert length(source_after.media_streams) == stream_count
+
+    assert Enum.map(source_after.media_streams, & &1.id) ==
+             Enum.map(source.media_streams, & &1.id)
   end
 
   test "rejects media paths outside library root" do
@@ -63,5 +146,72 @@ defmodule Hivefin.Scanner.ScannerTest do
       LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
 
     assert Enum.any?(LibraryContext.list_libraries(), &(&1.name == "Movies"))
+  end
+
+  test "second scan_library while running returns already_scanning" do
+    {:ok, lib} =
+      LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
+
+    Application.put_env(:hivefin, :scanner_test_delay_ms, 300)
+
+    assert :ok = Scanner.scan_library(lib.id)
+    assert {:error, :already_scanning} = Scanner.scan_library(lib.id)
+
+    assert :ok = Scanner.cancel(lib.id)
+
+    # Allow in-flight shutdown to settle
+    Process.sleep(50)
+
+    job = LibraryContext.get_latest_scan_job(lib.id)
+    assert job.status == :cancelled
+  end
+
+  test "cancel marks scan job cancelled and does not set last_scanned_at" do
+    {:ok, lib} =
+      LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
+
+    assert is_nil(lib.last_scanned_at)
+
+    Application.put_env(:hivefin, :scanner_test_delay_ms, 500)
+
+    assert :ok = Scanner.scan_library(lib.id)
+    assert :ok = Scanner.cancel(lib.id)
+
+    Process.sleep(50)
+
+    job = LibraryContext.get_latest_scan_job(lib.id)
+    assert job.status == :cancelled
+
+    lib = LibraryContext.get_library!(lib.id)
+    assert is_nil(lib.last_scanned_at)
+  end
+
+  test "cooperative cancel via ETS finalizes job as cancelled without last_scanned_at" do
+    {:ok, lib} =
+      LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
+
+    # Mid-scan soft cancel: test hook sets ETS flag; pipeline must not complete
+    # as :completed or touch last_scanned_at.
+    Application.put_env(:hivefin, :scanner_test_hook, fn library_id ->
+      :ets.insert(:hivefin_scanner_cancel, {library_id, true})
+    end)
+
+    assert {:error, :cancelled} = Scanner.scan_library_sync(lib.id)
+
+    job = LibraryContext.get_latest_scan_job(lib.id)
+    assert job.status == :cancelled
+
+    lib = LibraryContext.get_library!(lib.id)
+    assert is_nil(lib.last_scanned_at)
+  end
+
+  test "list media streams association loaded after scan" do
+    {:ok, lib} =
+      LibraryContext.create_library(%{name: "Movies", type: :movies, path: @movies_path})
+
+    assert :ok = Scanner.scan_library_sync(lib.id)
+    [source] = LibraryContext.list_media_sources(hd(LibraryContext.list_items(lib.id)).id)
+    assert Enum.any?(source.media_streams, &(&1.type == :video))
+    assert %MediaStream{} = hd(source.media_streams)
   end
 end

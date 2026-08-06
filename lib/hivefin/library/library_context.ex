@@ -5,8 +5,11 @@ defmodule Hivefin.Library.LibraryContext do
 
   import Ecto.Query
 
+  require Logger
+
   alias Hivefin.Repo
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, ScanJob}
+  alias Hivefin.MediaInfo.Prober
 
   @doc """
   Creates a library.
@@ -60,6 +63,7 @@ defmodule Hivefin.Library.LibraryContext do
     MediaSource
     |> where([ms], ms.item_id == ^item_id)
     |> order_by([ms], asc: ms.path)
+    |> preload([:media_streams])
     |> Repo.all()
   end
 
@@ -82,6 +86,21 @@ defmodule Hivefin.Library.LibraryContext do
     job
     |> ScanJob.changeset(attrs)
     |> Repo.update()
+  end
+
+  def get_latest_scan_job(library_id) do
+    ScanJob
+    |> where([j], j.library_id == ^library_id)
+    |> order_by([j], desc: j.inserted_at, desc: j.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def list_scan_jobs(library_id) do
+    ScanJob
+    |> where([j], j.library_id == ^library_id)
+    |> order_by([j], desc: j.inserted_at)
+    |> Repo.all()
   end
 
   def touch_library_scanned(%Library{} = library, at \\ DateTime.utc_now()) do
@@ -125,9 +144,12 @@ defmodule Hivefin.Library.LibraryContext do
   end
 
   @doc """
-  Upserts a media source for an item. Re-probes when size/mtime change.
+  Upserts a media source for an item.
+
+  Probes with ffprobe only on create or when size/mtime changed.
+  On re-probe failure, updates file metadata but **keeps** existing streams.
   """
-  def upsert_media_source(item_id, path, file_stat, probe_result) do
+  def upsert_media_source(item_id, path, file_stat) do
     path = Path.expand(path)
     container = path |> Path.extname() |> String.trim_leading(".") |> String.downcase()
     mtime = unix_mtime_to_datetime(file_stat.mtime)
@@ -135,28 +157,32 @@ defmodule Hivefin.Library.LibraryContext do
 
     case get_media_source_by_path(path) do
       %MediaSource{} = existing ->
-        unchanged? = existing.size == size and equal_mtime?(existing.mtime, mtime)
-
-        if unchanged? do
+        if unchanged?(existing, size, mtime) do
           {:ok, existing, :unchanged}
         else
-          replace_streams_and_update(
-            existing,
-            item_id,
-            path,
-            container,
-            size,
-            mtime,
-            probe_result
-          )
+          update_changed_source(existing, item_id, path, container, size, mtime)
         end
 
       nil ->
-        create_media_source_with_streams(item_id, path, container, size, mtime, probe_result)
+        create_source_with_probe(item_id, path, container, size, mtime)
     end
   end
 
-  defp create_media_source_with_streams(item_id, path, container, size, mtime, probe_result) do
+  defp unchanged?(%MediaSource{} = existing, size, mtime) do
+    existing.size == size and equal_mtime?(existing.mtime, mtime)
+  end
+
+  defp create_source_with_probe(item_id, path, container, size, mtime) do
+    probe_result =
+      case Prober.probe(path) do
+        {:ok, result} ->
+          result
+
+        {:error, reason} ->
+          Logger.warning("ffprobe failed for new source #{path}: #{inspect(reason)}")
+          %{format: %{}, streams: []}
+      end
+
     attrs = source_attrs(item_id, path, container, size, mtime, probe_result)
 
     Repo.transaction(fn ->
@@ -171,6 +197,20 @@ defmodule Hivefin.Library.LibraryContext do
     |> case do
       {:ok, source} -> {:ok, source, :created}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp update_changed_source(existing, item_id, path, container, size, mtime) do
+    case Prober.probe(path) do
+      {:ok, probe_result} ->
+        replace_streams_and_update(existing, item_id, path, container, size, mtime, probe_result)
+
+      {:error, reason} ->
+        Logger.warning(
+          "ffprobe failed for changed source #{path}; keeping existing streams: #{inspect(reason)}"
+        )
+
+        update_metadata_keep_streams(existing, item_id, path, container, size, mtime)
     end
   end
 
@@ -192,6 +232,27 @@ defmodule Hivefin.Library.LibraryContext do
     |> case do
       {:ok, source} -> {:ok, source, :updated}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp update_metadata_keep_streams(existing, item_id, path, container, size, mtime) do
+    attrs = %{
+      item_id: item_id,
+      path: path,
+      container: container,
+      size: size,
+      mtime: mtime
+    }
+
+    existing
+    |> MediaSource.changeset(attrs)
+    |> Repo.update()
+    |> case do
+      {:ok, source} ->
+        {:ok, Repo.preload(source, :media_streams, force: true), :updated}
+
+      error ->
+        error
     end
   end
 
