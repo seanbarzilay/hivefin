@@ -41,14 +41,23 @@ defmodule HivefinWeb.Router do
     get "/System/Info", SystemController, :info
     get "/Users/Me", UserController, :me
     get "/Users/:user_id/Views", ItemsController, :views
+    # Resume before Items/:item_id so "Resume" is not captured as an id
+    get "/Users/:user_id/Items/Resume", ItemsController, :resume
     get "/Users/:user_id/Items", ItemsController, :index
     get "/Users/:user_id/Items/:item_id", ItemsController, :show
     post "/Users/:user_id/Items/:item_id/UserData", SessionsController, :update_user_data
     post "/Users/:user_id/PlayedItems/:item_id", SessionsController, :mark_played
+    # NextUp before Shows/:series_id/* so "NextUp" is not a series id
+    get "/Shows/NextUp", ItemsController, :next_up
     get "/Shows/:series_id/Seasons", ItemsController, :seasons
     get "/Shows/:series_id/Episodes", ItemsController, :episodes
     get "/Items/:item_id/Images/:image_type", ImagesController, :show
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
+    get "/DisplayPreferences/:display_preferences_id", DisplayPreferencesController, :show
+    post "/DisplayPreferences/:display_preferences_id", DisplayPreferencesController, :update
+    get "/Sessions", SessionsController, :index
+    post "/Sessions/Capabilities", SessionsController, :capabilities
+    post "/Sessions/Capabilities/Full", SessionsController, :capabilities_full
     post "/Sessions/Playing", SessionsController, :playing
     post "/Sessions/Playing/Progress", SessionsController, :progress
     post "/Sessions/Playing/Stopped", SessionsController, :stopped

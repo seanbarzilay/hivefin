@@ -49,7 +49,8 @@ defmodule HivefinWeb.Compat.Tier02EndpointsTest do
     assert :ok = Scanner.scan_library_sync(library.id)
     [movie] = LibraryContext.list_items(library.id, type: :movie)
 
-    {:ok, conn: auth_conn, raw_conn: conn, user: user, library: library, movie: movie, token: token}
+    {:ok,
+     conn: auth_conn, raw_conn: conn, user: user, library: library, movie: movie, token: token}
   end
 
   for client <- ["web", "androidtv"] do

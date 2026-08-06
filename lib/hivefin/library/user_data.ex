@@ -112,6 +112,44 @@ defmodule Hivefin.Library.UserData do
     end
   end
 
+  @doc """
+  In-progress items for resume rows (`playback_position_ticks > 0`, not fully played).
+
+  Options:
+  - `:limit` — max rows (default 50)
+  - `:start_index` — offset (default 0)
+
+  Returns `{[%UserData{}] with item preloaded, total_count}`.
+  """
+  def list_resume(user_id, opts \\ []) when is_binary(user_id) do
+    limit = clamp_non_neg(Keyword.get(opts, :limit, 50))
+    start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
+
+    base =
+      from(ud in __MODULE__,
+        where:
+          ud.user_id == ^user_id and ud.playback_position_ticks > 0 and
+            ud.played == false,
+        order_by: [desc: ud.last_played_date, desc: ud.updated_at]
+      )
+
+    total = Repo.aggregate(base, :count)
+
+    rows =
+      base
+      |> limit(^limit)
+      |> offset(^start_index)
+      |> preload(:item)
+      |> Repo.all()
+
+    {rows, total}
+  end
+
+  defp clamp_non_neg(nil), do: nil
+  defp clamp_non_neg(n) when is_integer(n) and n < 0, do: 0
+  defp clamp_non_neg(n) when is_integer(n), do: n
+  defp clamp_non_neg(_), do: nil
+
   @allowed_attr_keys [
     :playback_position_ticks,
     :played_percentage,

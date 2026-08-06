@@ -63,6 +63,46 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
   end
 
   @doc """
+  `GET /Users/:user_id/Items/Resume` — in-progress items for continue watching.
+  """
+  def resume(conn, %{"user_id" => user_id} = params) do
+    if authorized_user?(conn, user_id) do
+      opts = [
+        limit: clamp_non_neg(parse_int(params["Limit"] || params["limit"])) || 50,
+        start_index: clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
+      ]
+
+      fields = parse_fields(params["Fields"] || params["fields"])
+      {rows, total} = UserData.list_resume(user_id, opts)
+
+      items =
+        rows
+        |> Enum.filter(fn ud -> match?(%Item{}, ud.item) end)
+        |> Enum.map(fn ud ->
+          BaseItem.from_item(ud.item,
+            fields: fields,
+            user_data: UserDataDto.from_user_data(ud)
+          )
+        end)
+
+      start_index = opts[:start_index] || 0
+      json(conn, BaseItem.query_result(items, total, start_index))
+    else
+      conn
+      |> put_status(:forbidden)
+      |> json(%{"error" => "forbidden"})
+    end
+  end
+
+  @doc """
+  `GET /Shows/NextUp` — next-up episodes (empty stub until series progress logic).
+  """
+  def next_up(conn, params) do
+    start_index = clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
+    json(conn, BaseItem.query_result([], 0, start_index))
+  end
+
+  @doc """
   Jellyfin `GET /Shows/:series_id/Seasons` — seasons under a series.
   """
   def seasons(conn, %{"series_id" => series_id} = params) do
@@ -192,4 +232,11 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(v), do: v
+
+  defp authorized_user?(conn, user_id) do
+    case conn.assigns[:current_user] do
+      %{id: ^user_id} -> true
+      _ -> false
+    end
+  end
 end

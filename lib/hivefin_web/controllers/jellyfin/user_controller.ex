@@ -15,18 +15,21 @@ defmodule HivefinWeb.Jellyfin.UserController do
     with true <- is_binary(username) and username != "",
          true <- is_binary(password),
          {:ok, user} <- Accounts.authenticate(username, password),
-         {:ok, token, _at} <- Accounts.issue_token(user, device_attrs) do
+         {:ok, token, at} <- Accounts.issue_token(user, device_attrs) do
       json(conn, %{
         "User" => Dto.User.from_user(user),
         "AccessToken" => token,
         "ServerId" => SystemInfo.server_id(),
         "SessionInfo" => %{
+          "Id" => at.id,
           "UserId" => user.id,
           "UserName" => user.name,
           "Client" => device_attrs[:client],
           "DeviceName" => device_attrs[:device_name],
           "DeviceId" => device_attrs[:device_id],
-          "ApplicationVersion" => device_attrs[:client_version]
+          "ApplicationVersion" => device_attrs[:client_version],
+          "IsActive" => true,
+          "ServerId" => SystemInfo.server_id()
         }
       })
     else

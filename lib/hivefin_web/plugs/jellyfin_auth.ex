@@ -15,8 +15,10 @@ defmodule HivefinWeb.Plugs.JellyfinAuth do
     with header <- first_auth_header(conn),
          {:ok, parsed} <- Auth.parse_authorization(header),
          token when is_binary(token) <- parsed.token,
-         %User{} = user <- Accounts.get_user_by_token(token) do
-      assign(conn, :current_user, user)
+         %{user: %User{} = user} = access_token <- Accounts.get_access_token(token) do
+      conn
+      |> assign(:current_user, user)
+      |> assign(:current_access_token, access_token)
     else
       _ ->
         conn

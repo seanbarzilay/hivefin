@@ -53,7 +53,12 @@ defmodule Hivefin.Jellyfin.SystemInfo do
       "IsShuttingDown" => false,
       "SupportsLibraryMonitor" => false,
       "WebSocketPortNumber" => endpoint_port(),
-      "CompletedInstallations" => []
+      "CompletedInstallations" => [],
+      # Fields Android TV / Web clients often read after login
+      "HasUpdateAvailable" => false,
+      "EncoderLocation" => "None",
+      "SystemUpdateLevel" => "Release",
+      "CastReceiverApplications" => []
     })
   end
 

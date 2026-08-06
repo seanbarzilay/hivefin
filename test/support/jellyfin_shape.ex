@@ -56,6 +56,7 @@ defmodule Hivefin.JellyfinShape do
   def assert_shape(actual, expected_types) when is_map(actual) and is_map(expected_types) do
     Enum.each(expected_types, fn {key, type} ->
       assert Map.has_key?(actual, key), "missing #{key}"
+
       assert type_match?(Map.get(actual, key), type),
              "bad type for #{key}: expected #{inspect(type)}, got #{inspect(Map.get(actual, key))}"
     end)

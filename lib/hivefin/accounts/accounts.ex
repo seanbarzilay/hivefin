@@ -53,18 +53,50 @@ defmodule Hivefin.Accounts do
   Looks up the user for a valid access token string, or `nil`.
   """
   def get_user_by_token(token) when is_binary(token) do
-    case Repo.get_by(AccessToken, token: token) do
-      nil ->
-        nil
-
-      access_token ->
-        access_token
-        |> Repo.preload(:user)
-        |> Map.fetch!(:user)
+    case get_access_token(token) do
+      nil -> nil
+      access_token -> access_token.user
     end
   end
 
   def get_user_by_token(_), do: nil
+
+  @doc """
+  Looks up an access token (with user preloaded) by its opaque string, or `nil`.
+  """
+  def get_access_token(token) when is_binary(token) do
+    case Repo.get_by(AccessToken, token: token) do
+      nil -> nil
+      access_token -> Repo.preload(access_token, :user)
+    end
+  end
+
+  def get_access_token(_), do: nil
+
+  @doc """
+  Lists active device sessions (access tokens) as domain records.
+
+  Optional filters:
+  - `:user_id` — only tokens for this user
+  - `:device_id` — only tokens for this device id
+  """
+  def list_access_tokens(opts \\ []) do
+    user_id = Keyword.get(opts, :user_id)
+    device_id = Keyword.get(opts, :device_id)
+
+    AccessToken
+    |> then(fn q ->
+      if is_binary(user_id) and user_id != "", do: where(q, [t], t.user_id == ^user_id), else: q
+    end)
+    |> then(fn q ->
+      if is_binary(device_id) and device_id != "",
+        do: where(q, [t], t.device_id == ^device_id),
+        else: q
+    end)
+    |> order_by([t], desc: t.updated_at)
+    |> preload(:user)
+    |> Repo.all()
+  end
 
   @doc """
   Revokes an access token by its string value.

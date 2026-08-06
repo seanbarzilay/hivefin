@@ -1,11 +1,44 @@
 defmodule HivefinWeb.Jellyfin.SessionsController do
   @moduledoc """
-  Jellyfin session progress reporting: Playing / Progress / Stopped.
+  Jellyfin sessions listing, capability stubs, and progress reporting.
   """
 
   use HivefinWeb, :controller
 
+  alias Hivefin.Accounts
+  alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
   alias Hivefin.Library.UserData
+
+  @doc """
+  `GET /Sessions` — active device sessions (from access tokens).
+  """
+  def index(conn, params) do
+    device_id = blank_to_nil(params["deviceId"] || params["DeviceId"])
+
+    sessions =
+      Accounts.list_access_tokens(device_id: device_id)
+      |> Enum.map(&SessionDto.from_access_token/1)
+
+    json(conn, sessions)
+  end
+
+  @doc """
+  `POST /Sessions/Capabilities` — accept capability report (no-op).
+  """
+  def capabilities(conn, _params) do
+    conn
+    |> put_status(:no_content)
+    |> send_resp(:no_content, "")
+  end
+
+  @doc """
+  `POST /Sessions/Capabilities/Full` — accept full capability body (no-op).
+  """
+  def capabilities_full(conn, _params) do
+    conn
+    |> put_status(:no_content)
+    |> send_resp(:no_content, "")
+  end
 
   @doc """
   `POST /Sessions/Playing` — client started playback.
@@ -168,4 +201,8 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   defp parse_bool("false"), do: false
   defp parse_bool("False"), do: false
   defp parse_bool(_), do: nil
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(v), do: v
 end
