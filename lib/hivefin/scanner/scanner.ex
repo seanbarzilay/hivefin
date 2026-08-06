@@ -177,59 +177,93 @@ defmodule Hivefin.Scanner do
   end
 
   defp do_scan_library(library, job, cancel_fun) do
-    if cancel_fun.() do
-      finalize_job(job, :cancelled, 0, 0, nil)
-      {:error, :cancelled}
-    else
-      try do
-        maybe_test_delay()
+    start = System.monotonic_time()
 
-        case library.type do
-          :movies ->
-            case scan_movies(library, cancel_fun) do
-              {:cancelled, found, added} ->
-                finalize_job(job, :cancelled, found, added, nil)
-                {:error, :cancelled}
+    result =
+      if cancel_fun.() do
+        finalize_job(job, :cancelled, 0, 0, nil)
+        {:error, :cancelled}
+      else
+        try do
+          maybe_test_delay()
 
-              {found, added} ->
-                if cancel_fun.() do
+          case library.type do
+            :movies ->
+              case scan_movies(library, cancel_fun) do
+                {:cancelled, found, added} ->
                   finalize_job(job, :cancelled, found, added, nil)
                   {:error, :cancelled}
-                else
-                  finalize_job(job, :completed, found, added, nil)
-                  LibraryContext.touch_library_scanned(library)
-                  :ok
-                end
-            end
 
-          :tv ->
-            case scan_tv(library, cancel_fun) do
-              {:cancelled, found, added} ->
-                finalize_job(job, :cancelled, found, added, nil)
-                {:error, :cancelled}
+                {found, added} ->
+                  if cancel_fun.() do
+                    finalize_job(job, :cancelled, found, added, nil)
+                    {:error, :cancelled}
+                  else
+                    finalize_job(job, :completed, found, added, nil)
+                    LibraryContext.touch_library_scanned(library)
+                    {:ok, found, added}
+                  end
+              end
 
-              {found, added} ->
-                if cancel_fun.() do
+            :tv ->
+              case scan_tv(library, cancel_fun) do
+                {:cancelled, found, added} ->
                   finalize_job(job, :cancelled, found, added, nil)
                   {:error, :cancelled}
-                else
-                  finalize_job(job, :completed, found, added, nil)
-                  LibraryContext.touch_library_scanned(library)
-                  :ok
-                end
-            end
+
+                {found, added} ->
+                  if cancel_fun.() do
+                    finalize_job(job, :cancelled, found, added, nil)
+                    {:error, :cancelled}
+                  else
+                    finalize_job(job, :completed, found, added, nil)
+                    LibraryContext.touch_library_scanned(library)
+                    {:ok, found, added}
+                  end
+              end
+          end
+        rescue
+          e ->
+            Logger.error("scan failed for library #{library.id}: #{Exception.message(e)}")
+            finalize_job(job, :failed, 0, 0, Exception.message(e))
+            {:error, e}
+        catch
+          :exit, reason ->
+            finalize_job(job, :failed, 0, 0, inspect(reason))
+            {:error, reason}
         end
-      rescue
-        e ->
-          Logger.error("scan failed for library #{library.id}: #{Exception.message(e)}")
-          finalize_job(job, :failed, 0, 0, Exception.message(e))
-          {:error, e}
-      catch
-        :exit, reason ->
-          finalize_job(job, :failed, 0, 0, inspect(reason))
-          {:error, reason}
       end
+
+    emit_scan_stop(library, job, start, result)
+
+    case result do
+      {:ok, _found, _added} -> :ok
+      other -> other
     end
+  end
+
+  defp emit_scan_stop(library, job, start, result) do
+    duration = System.monotonic_time() - start
+
+    {status, found, added} =
+      case result do
+        {:ok, found, added} -> {:completed, found, added}
+        {:error, :cancelled} -> {:cancelled, 0, 0}
+        {:error, _} -> {:failed, 0, 0}
+      end
+
+    :telemetry.execute(
+      [:hivefin, :scan, :stop],
+      %{duration: duration},
+      %{
+        library_id: library.id,
+        library_type: library.type,
+        job_id: job.id,
+        status: status,
+        items_found: found,
+        items_added: added
+      }
+    )
   end
 
   defp scan_movies(library, cancel_fun) do

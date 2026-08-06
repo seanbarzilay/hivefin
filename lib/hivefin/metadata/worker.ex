@@ -40,9 +40,7 @@ defmodule Hivefin.Metadata.Worker do
       :ok
   catch
     :exit, reason ->
-      Logger.warning(
-        "metadata refresh exited for #{item_id}: #{TMDB.redact_secrets(reason)}"
-      )
+      Logger.warning("metadata refresh exited for #{item_id}: #{TMDB.redact_secrets(reason)}")
 
       :ok
   end
@@ -82,9 +80,7 @@ defmodule Hivefin.Metadata.Worker do
         :ok
 
       {:error, reason} ->
-        Logger.info(
-          "metadata match failed for item #{item.id}: #{TMDB.redact_secrets(reason)}"
-        )
+        Logger.info("metadata match failed for item #{item.id}: #{TMDB.redact_secrets(reason)}")
 
         :ok
     end

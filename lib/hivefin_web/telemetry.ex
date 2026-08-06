@@ -79,15 +79,50 @@ defmodule HivefinWeb.Telemetry do
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
       summary("vm.total_run_queue_lengths.cpu"),
-      summary("vm.total_run_queue_lengths.io")
+      summary("vm.total_run_queue_lengths.io"),
+
+      # Hivefin domain
+      summary("hivefin.scan.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:library_type, :status],
+        description: "Library scan duration"
+      ),
+      counter("hivefin.playback.start.system_time",
+        tags: [:mode, :encoder],
+        description: "Playback sessions started"
+      ),
+      summary("hivefin.playback.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:mode, :encoder],
+        description: "Playback session lifetime"
+      ),
+      counter("hivefin.ffmpeg.encoder.system_time",
+        tags: [:encoder],
+        description: "FFmpeg encoder selections (including CPU fallback)"
+      ),
+      last_value("hivefin.playback.sessions.active",
+        description: "Active FFmpeg playback sessions"
+      )
     ]
   end
 
   defp periodic_measurements do
     [
-      # A module, function and arguments to be invoked periodically.
-      # This function must call :telemetry.execute/3 and a metric must be added above.
-      # {HivefinWeb, :count_users, []}
+      {__MODULE__, :dispatch_playback_session_count, []}
     ]
+  end
+
+  @doc false
+  def dispatch_playback_session_count do
+    count =
+      try do
+        Hivefin.Playback.Supervisor.count_sessions()
+      rescue
+        _ -> 0
+      catch
+        :exit, _ -> 0
+      end
+
+    :telemetry.execute([:hivefin, :playback, :sessions], %{active: count}, %{})
   end
 end

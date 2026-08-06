@@ -1,7 +1,21 @@
 defmodule Hivefin.Application do
   # See https://elixir.hexdocs.pm/Application.html
   # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  OTP application entry.
+
+  ## Graceful shutdown
+
+  On SIGTERM / `Application.stop(:hivefin)`:
+
+  1. `prep_stop/1` drains playback: reject new sessions, stop running ones
+     (`Session.terminate/2` SIGTERM/SIGKILL FFmpeg and cleans temp dirs).
+  2. The root supervisor stops children in reverse start order: Endpoint
+     (HTTP), then Playback.Supervisor (double-check drain), workers, Repo.
+  3. Session child specs use `shutdown: 5_000` so FFmpeg kill has a bounded wait.
+
+  See `docs/ops.md` for reverse-proxy drain and backup notes.
+  """
 
   use Application
 
@@ -36,6 +50,22 @@ defmodule Hivefin.Application do
       error ->
         error
     end
+  end
+
+  # Called before the supervision tree is torn down (SIGTERM / app stop).
+  @impl true
+  def prep_stop(state) do
+    Logger.info("Hivefin shutting down: draining playback sessions")
+
+    try do
+      Hivefin.Playback.Supervisor.drain()
+    rescue
+      e -> Logger.warning("Playback drain failed: #{Exception.message(e)}")
+    catch
+      :exit, reason -> Logger.warning("Playback drain exited: #{inspect(reason)}")
+    end
+
+    state
   end
 
   # Tell Phoenix to update the endpoint configuration

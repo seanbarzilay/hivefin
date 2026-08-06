@@ -6,6 +6,9 @@ defmodule Hivefin.Playback.Supervisor do
   `start_session/1` returns `{:error, :busy}` when active children reach
   `:max_transcodes` (default 2). Capacity check and child start happen in one
   GenServer call so races cannot exceed the limit.
+
+  During graceful shutdown, `drain/0` rejects new starts and stops all
+  sessions so FFmpeg processes receive SIGTERM via `Session.terminate/2`.
   """
 
   use GenServer
@@ -28,7 +31,7 @@ defmodule Hivefin.Playback.Supervisor do
   If a session with the same `:id` is already running, returns `{:ok, pid}`
   of the existing process (idempotent for reconnecting clients).
   """
-  @spec start_session(map()) :: {:ok, pid()} | {:error, :busy | term()}
+  @spec start_session(map()) :: {:ok, pid()} | {:error, :busy | :draining | term()}
   def start_session(attrs) when is_map(attrs) do
     GenServer.call(__MODULE__, {:start_session, attrs}, 30_000)
   end
@@ -64,6 +67,16 @@ defmodule Hivefin.Playback.Supervisor do
   end
 
   @doc """
+  Reject new sessions and stop all active ones (graceful app shutdown).
+  """
+  @spec drain() :: :ok
+  def drain do
+    GenServer.call(__MODULE__, :drain, 15_000)
+  catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
   Configured maximum concurrent sessions (default 2).
   """
   @spec max_transcodes() :: pos_integer()
@@ -95,10 +108,14 @@ defmodule Hivefin.Playback.Supervisor do
         max_seconds: 5
       )
 
-    {:ok, %{}}
+    {:ok, %{draining: false}}
   end
 
   @impl true
+  def handle_call({:start_session, _attrs}, _from, %{draining: true} = state) do
+    {:reply, {:error, :draining}, state}
+  end
+
   def handle_call({:start_session, attrs}, _from, state) do
     id = Map.fetch!(attrs, :id)
 
@@ -120,5 +137,30 @@ defmodule Hivefin.Playback.Supervisor do
       end
 
     {:reply, reply, state}
+  end
+
+  def handle_call(:drain, _from, state) do
+    stop_all_sessions()
+    {:reply, :ok, %{state | draining: true}}
+  end
+
+  @impl true
+  def terminate(_reason, _state) do
+    stop_all_sessions()
+    :ok
+  end
+
+  defp stop_all_sessions do
+    case Process.whereis(@session_sup) do
+      nil ->
+        :ok
+
+      sup ->
+        DynamicSupervisor.which_children(sup)
+        |> Enum.each(fn
+          {_, pid, :worker, _} when is_pid(pid) -> Session.stop(pid)
+          _ -> :ok
+        end)
+    end
   end
 end

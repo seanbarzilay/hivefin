@@ -45,6 +45,7 @@ defmodule Hivefin.Playback.Session do
     :allow_cpu_fallback,
     :fallback_attempted,
     :idle_timer,
+    :started_at_native,
     buffer: <<>>,
     waiters: [],
     consumers: %{},
@@ -224,7 +225,26 @@ defmodule Hivefin.Playback.Session do
           case start_ffmpeg(state) do
             {:ok, state} ->
               state = schedule_idle(state)
-              {:ok, %{state | status: :running}}
+              state = %{state | status: :running, started_at_native: System.monotonic_time()}
+
+              :telemetry.execute(
+                [:hivefin, :playback, :start],
+                %{system_time: System.system_time()},
+                %{
+                  session_id: state.id,
+                  mode: state.mode,
+                  encoder: state.encoder,
+                  format: state.format
+                }
+              )
+
+              :telemetry.execute(
+                [:hivefin, :ffmpeg, :encoder],
+                %{system_time: System.system_time()},
+                %{encoder: state.encoder, session_id: state.id, mode: state.mode}
+              )
+
+              {:ok, state}
 
             {:error, reason} ->
               cleanup_temp(temp_dir)
@@ -390,11 +410,30 @@ defmodule Hivefin.Playback.Session do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
     reply_all_waiters(state, {:error, :closed})
     if state.port, do: Runner.kill(state.port)
     if state.os_pid, do: Runner.kill(state.os_pid)
     cleanup_temp(state.temp_dir)
+
+    duration =
+      if is_integer(state.started_at_native) do
+        System.monotonic_time() - state.started_at_native
+      else
+        0
+      end
+
+    :telemetry.execute(
+      [:hivefin, :playback, :stop],
+      %{duration: duration},
+      %{
+        session_id: state.id,
+        mode: state.mode,
+        encoder: state.encoder,
+        reason: reason
+      }
+    )
+
     :ok
   end
 
@@ -475,6 +514,12 @@ defmodule Hivefin.Playback.Session do
 
     case start_ffmpeg(state) do
       {:ok, state} ->
+        :telemetry.execute(
+          [:hivefin, :ffmpeg, :encoder],
+          %{system_time: System.system_time()},
+          %{encoder: state.encoder, session_id: state.id, mode: state.mode, fallback: true}
+        )
+
         {:noreply, touch(%{state | status: :running})}
 
       {:error, reason} ->

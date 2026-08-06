@@ -20,6 +20,7 @@ defmodule HivefinWeb.Router do
 
   scope "/", HivefinWeb do
     get "/healthz", HealthController, :show
+    get "/readyz", ReadyController, :show
   end
 
   # Stream routes — token via query param; not limited to application/json Accept.
