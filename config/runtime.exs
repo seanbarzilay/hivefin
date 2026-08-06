@@ -30,6 +30,14 @@ config :hivefin, :admin_bootstrap,
   username: System.get_env("HIVEFIN_ADMIN_USER"),
   password: System.get_env("HIVEFIN_ADMIN_PASSWORD")
 
+if path = System.get_env("HIVEFIN_FFPROBE_PATH") do
+  config :hivefin, :ffprobe_path, path
+end
+
+if path = System.get_env("HIVEFIN_FFMPEG_PATH") do
+  config :hivefin, :ffmpeg_path, path
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

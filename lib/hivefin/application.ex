@@ -14,8 +14,7 @@ defmodule Hivefin.Application do
       Hivefin.Repo,
       {DNSCluster, query: Application.get_env(:hivefin, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Hivefin.PubSub},
-      # Start a worker by calling: Hivefin.Worker.start_link(arg)
-      # {Hivefin.Worker, arg},
+      Hivefin.Scanner,
       # Start to serve requests, typically the last entry
       HivefinWeb.Endpoint
     ]

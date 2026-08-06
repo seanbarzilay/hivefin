@@ -9,7 +9,9 @@ import Config
 
 config :hivefin,
   ecto_repos: [Hivefin.Repo],
-  generators: [timestamp_type: :utc_datetime, binary_id: true]
+  generators: [timestamp_type: :utc_datetime, binary_id: true],
+  ffprobe_path: System.find_executable("ffprobe") || "ffprobe",
+  ffmpeg_path: System.find_executable("ffmpeg") || "ffmpeg"
 
 # Configure the endpoint
 config :hivefin, HivefinWeb.Endpoint,
