@@ -26,6 +26,10 @@ defmodule HivefinWeb.Router do
     pipe_through :jellyfin_auth
     get "/System/Info", SystemController, :info
     get "/Users/Me", UserController, :me
+    get "/Users/:user_id/Views", ItemsController, :views
+    get "/Users/:user_id/Items", ItemsController, :index
+    get "/Users/:user_id/Items/:item_id", ItemsController, :show
+    get "/Items/:item_id/Images/:image_type", ImagesController, :show
   end
 
   scope "/api", HivefinWeb do

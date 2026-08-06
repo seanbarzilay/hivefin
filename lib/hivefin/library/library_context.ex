@@ -59,6 +59,80 @@ defmodule Hivefin.Library.LibraryContext do
     Repo.get(Item, id)
   end
 
+  @doc """
+  Lists browseable children for Jellyfin Items queries.
+
+  When `parent_id` is `nil`, returns libraries as virtual root folders
+  (unless filters select concrete item types such as movies).
+
+  When `parent_id` is a library id, returns items in that library.
+  When `parent_id` is an item id, returns direct children of that item.
+
+  ## Options
+  - `:include_item_types` — list of atoms (`:movie`, `:series`, …) or nil
+  - `:recursive` — when true with item types, search whole library/tree
+  - `:limit` — max rows (nil = no limit)
+  - `:start_index` — offset (default 0)
+  - `:preload_media_sources` — preload sources + streams (default false)
+
+  Returns `{entries, total_count}` where entries are `%Library{}` or `%Item{}`.
+  """
+  def list_items_for_parent(parent_id, opts \\ []) do
+    include_types = normalize_include_types(Keyword.get(opts, :include_item_types))
+    recursive? = truthy?(Keyword.get(opts, :recursive, false))
+    limit = Keyword.get(opts, :limit)
+    start_index = Keyword.get(opts, :start_index, 0) || 0
+    preload_sources? = Keyword.get(opts, :preload_media_sources, false)
+
+    cond do
+      is_nil(parent_id) and libraries_as_root?(include_types, recursive?) ->
+        libraries = list_libraries()
+        total = length(libraries)
+        {paginate(libraries, start_index, limit), total}
+
+      is_nil(parent_id) ->
+        query =
+          Item
+          |> maybe_filter_types(include_types)
+          |> order_by([i], asc: i.sort_name, asc: i.name)
+
+        page_items(query, start_index, limit, preload_sources?)
+
+      library = get_library(parent_id) ->
+        query =
+          Item
+          |> where([i], i.library_id == ^library.id)
+          |> maybe_scope_parent(recursive?, nil)
+          |> maybe_filter_types(include_types)
+          |> order_by([i], asc: i.sort_name, asc: i.name)
+
+        page_items(query, start_index, limit, preload_sources?)
+
+      item = get_item(parent_id) ->
+        query =
+          Item
+          |> where([i], i.library_id == ^item.library_id)
+          |> maybe_scope_parent(recursive?, item.id)
+          |> maybe_filter_types(include_types)
+          |> order_by([i], asc: i.sort_name, asc: i.name)
+
+        page_items(query, start_index, limit, preload_sources?)
+
+      true ->
+        {[], 0}
+    end
+  end
+
+  @doc """
+  Gets an item with media sources and streams preloaded.
+  """
+  def get_item_with_sources(id) do
+    Item
+    |> where([i], i.id == ^id)
+    |> preload(media_sources: :media_streams)
+    |> Repo.one()
+  end
+
   def list_media_sources(item_id) do
     MediaSource
     |> where([ms], ms.item_id == ^item_id)
@@ -301,4 +375,91 @@ defmodule Hivefin.Library.LibraryContext do
 
   defp maybe_filter_type(query, nil), do: query
   defp maybe_filter_type(query, type), do: where(query, [i], i.type == ^type)
+
+  defp maybe_filter_types(query, nil), do: query
+  defp maybe_filter_types(query, []), do: query
+  defp maybe_filter_types(query, types), do: where(query, [i], i.type in ^types)
+
+  # Root with no concrete type filter → libraries as CollectionFolders.
+  # When client asks for Movie/Series/etc (esp. recursive), query items instead.
+  defp libraries_as_root?(nil, _recursive?), do: true
+  defp libraries_as_root?([], _recursive?), do: true
+  defp libraries_as_root?(_types, true), do: false
+  defp libraries_as_root?(_types, false), do: false
+
+  defp maybe_scope_parent(query, true, _parent_id), do: query
+
+  defp maybe_scope_parent(query, false, nil) do
+    where(query, [i], is_nil(i.parent_id))
+  end
+
+  defp maybe_scope_parent(query, false, parent_id) do
+    where(query, [i], i.parent_id == ^parent_id)
+  end
+
+  defp page_items(query, start_index, limit, preload_sources?) do
+    total = Repo.aggregate(query, :count, :id)
+
+    query =
+      query
+      |> offset(^start_index)
+      |> maybe_limit(limit)
+      |> maybe_preload_sources(preload_sources?)
+
+    {Repo.all(query), total}
+  end
+
+  defp maybe_limit(query, nil), do: query
+  defp maybe_limit(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
+  defp maybe_limit(query, _), do: query
+
+  defp maybe_preload_sources(query, true) do
+    preload(query, media_sources: :media_streams)
+  end
+
+  defp maybe_preload_sources(query, _), do: query
+
+  defp paginate(list, start_index, nil) when start_index <= 0, do: list
+
+  defp paginate(list, start_index, nil) do
+    Enum.drop(list, start_index)
+  end
+
+  defp paginate(list, start_index, limit) when is_integer(limit) do
+    list
+    |> Enum.drop(max(start_index, 0))
+    |> Enum.take(limit)
+  end
+
+  defp normalize_include_types(nil), do: nil
+  defp normalize_include_types([]), do: nil
+
+  defp normalize_include_types(types) when is_list(types) do
+    types
+    |> Enum.map(&normalize_item_type/1)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      list -> list
+    end
+  end
+
+  defp normalize_include_types(type), do: normalize_include_types([type])
+
+  defp normalize_item_type(type) when type in [:movie, :series, :season, :episode], do: type
+
+  defp normalize_item_type(type) when is_binary(type) do
+    case String.downcase(type) do
+      "movie" -> :movie
+      "series" -> :series
+      "season" -> :season
+      "episode" -> :episode
+      _ -> nil
+    end
+  end
+
+  defp normalize_item_type(_), do: nil
+
+  defp truthy?(v) when v in [true, "true", "True", "1", 1], do: true
+  defp truthy?(_), do: false
 end
