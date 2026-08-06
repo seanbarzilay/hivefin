@@ -197,39 +197,89 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert json_response(conn, 403)
   end
 
-  test "remux Static=false returns 501 until Task 8", %{
+  @tag :ffmpeg
+  test "remux Static=false streams MPEG-TS", %{
     movie: movie,
     source: source,
     user: user
   } do
     token = StreamToken.sign(user.id, movie.id, source.id)
+    session = "play-remux-#{System.unique_integer([:positive])}"
 
     conn =
       build_conn()
       |> get(~p"/Videos/#{movie.id}/stream.ts", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
-        "Static" => "false"
+        "Static" => "false",
+        "PlaySessionId" => session
       })
 
-    assert %{"error" => "remux_not_implemented"} = json_response(conn, 501)
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") |> List.first() =~ "video/mp2t"
+    body = response(conn, 200)
+    assert byte_size(body) > 0
   end
 
-  test "transcode master.m3u8 returns 501 with valid token", %{
+  @tag :ffmpeg
+  test "transcode master.m3u8 streams re-encoded MPEG-TS", %{
     movie: movie,
     source: source,
     user: user
   } do
     token = StreamToken.sign(user.id, movie.id, source.id)
+    session = "play-xcode-#{System.unique_integer([:positive])}"
 
     conn =
       build_conn()
       |> get(~p"/Videos/#{movie.id}/master.m3u8", %{
         "MediaSourceId" => source.id,
-        "api_key" => token
+        "api_key" => token,
+        "PlaySessionId" => session,
+        "MaxHeight" => "240"
       })
 
-    assert %{"error" => "transcode_not_implemented"} = json_response(conn, 501)
+    assert conn.status == 200
+    body = response(conn, 200)
+    assert byte_size(body) > 100
+  end
+
+  @tag :ffmpeg
+  test "transcode returns 503 when at capacity", %{
+    movie: movie,
+    source: source,
+    user: user
+  } do
+    previous = Application.get_env(:hivefin, :max_transcodes)
+    Application.put_env(:hivefin, :max_transcodes, 1)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:hivefin, :max_transcodes, previous),
+        else: Application.delete_env(:hivefin, :max_transcodes)
+    end)
+
+    token = StreamToken.sign(user.id, movie.id, source.id)
+
+    # Hold capacity with a direct session
+    assert {:ok, hold} =
+             Hivefin.Playback.Supervisor.start_session(%{
+               id: "hold-#{System.unique_integer([:positive])}",
+               mode: :remux,
+               input_path: @fixture_mp4
+             })
+
+    conn =
+      build_conn()
+      |> get(~p"/Videos/#{movie.id}/master.m3u8", %{
+        "MediaSourceId" => source.id,
+        "api_key" => token,
+        "PlaySessionId" => "busy-#{System.unique_integer([:positive])}"
+      })
+
+    assert %{"error" => "too_many_transcodes"} = json_response(conn, 503)
+
+    Hivefin.Playback.Session.stop(hold)
   end
 
   test "PlaybackInfo mkv profile yields DirectStream remux URL", %{

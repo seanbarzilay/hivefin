@@ -38,6 +38,27 @@ if path = System.get_env("HIVEFIN_FFMPEG_PATH") do
   config :hivefin, :ffmpeg_path, path
 end
 
+if hw = System.get_env("HIVEFIN_HW_ACCEL") do
+  config :hivefin, :hw_accel, hw
+end
+
+if max = System.get_env("HIVEFIN_MAX_TRANSCODES") do
+  case Integer.parse(max) do
+    {n, _} when n > 0 -> config :hivefin, :max_transcodes, n
+    _ -> :ok
+  end
+end
+
+if dir = System.get_env("HIVEFIN_TRANSCODE_DIR") do
+  config :hivefin, :transcode_dir, dir
+end
+
+if fallback = System.get_env("HIVEFIN_ALLOW_CPU_FALLBACK") do
+  config :hivefin,
+         :allow_cpu_fallback,
+         fallback not in ["false", "0", "no", "FALSE", "No"]
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

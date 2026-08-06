@@ -60,8 +60,7 @@ defmodule Hivefin.Playback.Decision do
          %{
            reason: :container_not_allowed,
            remux_container: "ts",
-           # Remux runner lands in Task 8; decision + URL surface here.
-           implemented: false,
+           implemented: true,
            container: container,
            video_codec: video,
            audio_codec: audio
@@ -71,7 +70,7 @@ defmodule Hivefin.Playback.Decision do
         {:transcode,
          %{
            reason: :video_codec_not_allowed,
-           implemented: false,
+           implemented: true,
            container: container,
            video_codec: video,
            audio_codec: audio
@@ -81,7 +80,7 @@ defmodule Hivefin.Playback.Decision do
         {:transcode,
          %{
            reason: :audio_codec_not_allowed,
-           implemented: false,
+           implemented: true,
            container: container,
            video_codec: video,
            audio_codec: audio
@@ -91,7 +90,7 @@ defmodule Hivefin.Playback.Decision do
         {:transcode,
          %{
            reason: :incompatible,
-           implemented: false,
+           implemented: true,
            container: container,
            video_codec: video,
            audio_codec: audio

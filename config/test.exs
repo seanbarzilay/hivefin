@@ -28,6 +28,13 @@ config :argon2_elixir,
 # Skip admin bootstrap on app start in tests
 config :hivefin, :bootstrap_admin_on_start, false
 
+# Playback / FFmpeg sessions — keep concurrency low and isolate temp dirs
+config :hivefin,
+  max_transcodes: 2,
+  hw_accel: :none,
+  allow_cpu_fallback: true,
+  transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode-test")
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

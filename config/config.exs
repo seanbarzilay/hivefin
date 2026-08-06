@@ -11,7 +11,11 @@ config :hivefin,
   ecto_repos: [Hivefin.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true],
   ffprobe_path: System.find_executable("ffprobe") || "ffprobe",
-  ffmpeg_path: System.find_executable("ffmpeg") || "ffmpeg"
+  ffmpeg_path: System.find_executable("ffmpeg") || "ffmpeg",
+  hw_accel: :auto,
+  max_transcodes: 2,
+  allow_cpu_fallback: true,
+  transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode")
 
 # Configure the endpoint
 config :hivefin, HivefinWeb.Endpoint,
