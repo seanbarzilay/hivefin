@@ -53,4 +53,72 @@ defmodule Hivefin.AccountsTest do
     assert found.id == user.id
     assert Accounts.get_user_by_token("nope") == nil
   end
+
+  test "issue_token requires device_id" do
+    {:ok, user} =
+      Accounts.create_user(%{
+        name: "Dev",
+        username: "devreq",
+        password: "password1",
+        admin: false
+      })
+
+    assert {:error, changeset} =
+             Accounts.issue_token(user, %{
+               device_name: "Phone",
+               client: "App",
+               client_version: "1.0"
+             })
+
+    assert %{device_id: _} = errors_on(changeset)
+  end
+
+  test "issue_token ignores user_id and token from attrs" do
+    {:ok, user} =
+      Accounts.create_user(%{
+        name: "Safe",
+        username: "safe",
+        password: "password1",
+        admin: false
+      })
+
+    assert {:ok, token, at} =
+             Accounts.issue_token(user, %{
+               device_id: "d1",
+               device_name: "Phone",
+               client: "App",
+               client_version: "1.0",
+               user_id: Ecto.UUID.generate(),
+               token: "attacker-chosen-token"
+             })
+
+    assert at.user_id == user.id
+    assert token != "attacker-chosen-token"
+    assert at.token == token
+    assert Accounts.get_user_by_token("attacker-chosen-token") == nil
+    assert Accounts.get_user_by_token(token).id == user.id
+  end
+
+  test "revoke_token removes token lookup" do
+    {:ok, user} =
+      Accounts.create_user(%{
+        name: "Rev",
+        username: "rev",
+        password: "password1",
+        admin: false
+      })
+
+    assert {:ok, token, _} =
+             Accounts.issue_token(user, %{
+               device_id: "d1",
+               device_name: "Phone",
+               client: "App",
+               client_version: "1.0"
+             })
+
+    assert Accounts.get_user_by_token(token).id == user.id
+    assert {:ok, _} = Accounts.revoke_token(token)
+    assert Accounts.get_user_by_token(token) == nil
+    assert {:error, :not_found} = Accounts.revoke_token(token)
+  end
 end

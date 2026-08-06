@@ -38,7 +38,10 @@ defmodule Hivefin.Accounts do
     token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     %AccessToken{}
-    |> AccessToken.changeset(Map.merge(attrs, %{user_id: user.id, token: token}))
+    |> AccessToken.changeset(attrs)
+    |> Ecto.Changeset.put_change(:user_id, user.id)
+    |> Ecto.Changeset.put_change(:token, token)
+    |> Ecto.Changeset.validate_required([:user_id, :token])
     |> Repo.insert()
     |> case do
       {:ok, at} -> {:ok, token, at}

@@ -98,4 +98,34 @@ defmodule HivefinWeb.Jellyfin.UserControllerTest do
     conn = get(conn, ~p"/Users/Me")
     assert json_response(conn, 401)
   end
+
+  test "GET /Users/Me returns 401 after token is revoked", %{conn: conn} do
+    {:ok, user} =
+      Hivefin.Accounts.create_user(%{
+        name: "Revoked",
+        username: "revoked",
+        password: "password1",
+        admin: true
+      })
+
+    {:ok, token, _} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "dev",
+        device_name: "Dev",
+        client: "Test",
+        client_version: "1.0"
+      })
+
+    assert {:ok, _} = Hivefin.Accounts.revoke_token(token)
+
+    conn =
+      conn
+      |> put_req_header(
+        "x-emby-authorization",
+        ~s(MediaBrowser Client="Test", Device="Dev", DeviceId="dev", Version="1.0", Token="#{token}")
+      )
+      |> get(~p"/Users/Me")
+
+    assert json_response(conn, 401)
+  end
 end
