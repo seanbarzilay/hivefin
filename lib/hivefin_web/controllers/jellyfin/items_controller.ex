@@ -63,12 +63,17 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
       include_item_types:
         parse_include_types(params["IncludeItemTypes"] || params["includeItemTypes"]),
       recursive: params["Recursive"] || params["recursive"],
-      limit: parse_int(params["Limit"] || params["limit"]),
-      start_index: parse_int(params["StartIndex"] || params["startIndex"]) || 0,
+      limit: clamp_non_neg(parse_int(params["Limit"] || params["limit"])),
+      start_index: clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0,
+      sort_by: params["SortBy"] || params["sortBy"],
       fields: fields,
       preload_media_sources: "MediaSources" in fields
     ]
   end
+
+  defp clamp_non_neg(nil), do: nil
+  defp clamp_non_neg(n) when is_integer(n) and n < 0, do: 0
+  defp clamp_non_neg(n) when is_integer(n), do: n
 
   defp parse_include_types(nil), do: nil
   defp parse_include_types(""), do: nil

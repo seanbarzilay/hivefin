@@ -6,13 +6,16 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
 
   test "maps movie item" do
     id = Ecto.UUID.generate()
+    library_id = Ecto.UUID.generate()
 
     item = %Item{
       id: id,
+      library_id: library_id,
       name: "X",
       type: :movie,
       production_year: 2008,
-      sort_name: "x"
+      sort_name: "x",
+      parent_id: nil
     }
 
     dto = BaseItem.from_item(item, user_data: nil)
@@ -23,10 +26,27 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert dto["ProductionYear"] == 2008
     assert dto["IsFolder"] == false
     assert dto["SortName"] == "x"
+    assert dto["ParentId"] == library_id
     assert dto["ImageTags"] == %{}
     assert dto["UserData"]["Played"] == false
     assert dto["UserData"]["PlaybackPositionTicks"] == 0
     refute Map.has_key?(dto, "MediaSources")
+  end
+
+  test "ParentId prefers item parent over library for nested items" do
+    library_id = Ecto.UUID.generate()
+    parent_id = Ecto.UUID.generate()
+
+    item = %Item{
+      id: Ecto.UUID.generate(),
+      library_id: library_id,
+      parent_id: parent_id,
+      name: "Ep",
+      type: :episode,
+      sort_name: "ep"
+    }
+
+    assert BaseItem.from_item(item)["ParentId"] == parent_id
   end
 
   test "maps series/season/episode types" do
@@ -35,7 +55,14 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
           {:season, "Season"},
           {:episode, "Episode"}
         ] do
-      item = %Item{id: Ecto.UUID.generate(), name: "N", type: type, sort_name: "n"}
+      item = %Item{
+        id: Ecto.UUID.generate(),
+        library_id: Ecto.UUID.generate(),
+        name: "N",
+        type: type,
+        sort_name: "n"
+      }
+
       assert BaseItem.from_item(item)["Type"] == expected
     end
   end

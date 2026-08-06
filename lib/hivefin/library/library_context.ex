@@ -71,8 +71,10 @@ defmodule Hivefin.Library.LibraryContext do
   ## Options
   - `:include_item_types` — list of atoms (`:movie`, `:series`, …) or nil
   - `:recursive` — when true with item types, search whole library/tree
-  - `:limit` — max rows (nil = no limit)
-  - `:start_index` — offset (default 0)
+  - `:limit` — max rows (nil = no limit); negative values clamped to 0
+  - `:start_index` — offset (default 0); negative values clamped to 0
+  - `:sort_by` — jellyfin field name(s): SortName (default), Name, ProductionYear,
+    PremiereDate, DateCreated (comma-separated; first supported field wins)
   - `:preload_media_sources` — preload sources + streams (default false)
 
   Returns `{entries, total_count}` where entries are `%Library{}` or `%Item{}`.
@@ -80,13 +82,14 @@ defmodule Hivefin.Library.LibraryContext do
   def list_items_for_parent(parent_id, opts \\ []) do
     include_types = normalize_include_types(Keyword.get(opts, :include_item_types))
     recursive? = truthy?(Keyword.get(opts, :recursive, false))
-    limit = Keyword.get(opts, :limit)
-    start_index = Keyword.get(opts, :start_index, 0) || 0
+    limit = clamp_non_neg(Keyword.get(opts, :limit))
+    start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
+    sort_by = normalize_sort_by(Keyword.get(opts, :sort_by))
     preload_sources? = Keyword.get(opts, :preload_media_sources, false)
 
     cond do
       is_nil(parent_id) and libraries_as_root?(include_types, recursive?) ->
-        libraries = list_libraries()
+        libraries = list_libraries() |> sort_libraries(sort_by)
         total = length(libraries)
         {paginate(libraries, start_index, limit), total}
 
@@ -94,7 +97,7 @@ defmodule Hivefin.Library.LibraryContext do
         query =
           Item
           |> maybe_filter_types(include_types)
-          |> order_by([i], asc: i.sort_name, asc: i.name)
+          |> apply_item_sort(sort_by)
 
         page_items(query, start_index, limit, preload_sources?)
 
@@ -104,7 +107,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> where([i], i.library_id == ^library.id)
           |> maybe_scope_parent(recursive?, nil)
           |> maybe_filter_types(include_types)
-          |> order_by([i], asc: i.sort_name, asc: i.name)
+          |> apply_item_sort(sort_by)
 
         page_items(query, start_index, limit, preload_sources?)
 
@@ -114,7 +117,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> where([i], i.library_id == ^item.library_id)
           |> maybe_scope_parent(recursive?, item.id)
           |> maybe_filter_types(include_types)
-          |> order_by([i], asc: i.sort_name, asc: i.name)
+          |> apply_item_sort(sort_by)
 
         page_items(query, start_index, limit, preload_sources?)
 
@@ -379,6 +382,78 @@ defmodule Hivefin.Library.LibraryContext do
   defp maybe_filter_types(query, nil), do: query
   defp maybe_filter_types(query, []), do: query
   defp maybe_filter_types(query, types), do: where(query, [i], i.type in ^types)
+
+  defp apply_item_sort(query, :production_year) do
+    order_by(query, [i], asc_nulls_last: i.production_year, asc: i.sort_name, asc: i.name)
+  end
+
+  defp apply_item_sort(query, :premiere_date) do
+    order_by(query, [i], asc_nulls_last: i.premiere_date, asc: i.sort_name, asc: i.name)
+  end
+
+  defp apply_item_sort(query, :date_created) do
+    order_by(query, [i], asc: i.inserted_at, asc: i.sort_name, asc: i.name)
+  end
+
+  defp apply_item_sort(query, :name) do
+    order_by(query, [i], asc: i.name, asc: i.sort_name)
+  end
+
+  defp apply_item_sort(query, _sort_name) do
+    order_by(query, [i], asc: i.sort_name, asc: i.name)
+  end
+
+  defp sort_libraries(libraries, :name) do
+    Enum.sort_by(libraries, & &1.name)
+  end
+
+  defp sort_libraries(libraries, :date_created) do
+    Enum.sort_by(libraries, & &1.inserted_at, DateTime)
+  end
+
+  defp sort_libraries(libraries, _) do
+    Enum.sort_by(libraries, &String.downcase(&1.name || ""))
+  end
+
+  defp normalize_sort_by(nil), do: :sort_name
+  defp normalize_sort_by(""), do: :sort_name
+
+  defp normalize_sort_by(sort_by) when is_binary(sort_by) do
+    sort_by
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.find_value(:sort_name, &sort_field_atom/1)
+  end
+
+  defp normalize_sort_by(sort_by) when is_list(sort_by) do
+    Enum.find_value(sort_by, :sort_name, fn
+      field when is_binary(field) -> sort_field_atom(field)
+      field when is_atom(field) -> sort_field_atom(Atom.to_string(field))
+      _ -> nil
+    end) || :sort_name
+  end
+
+  defp normalize_sort_by(sort_by) when is_atom(sort_by) do
+    sort_field_atom(Atom.to_string(sort_by)) || :sort_name
+  end
+
+  defp normalize_sort_by(_), do: :sort_name
+
+  defp sort_field_atom(field) when is_binary(field) do
+    case field |> String.trim() |> String.downcase() do
+      "sortname" -> :sort_name
+      "name" -> :name
+      "productionyear" -> :production_year
+      "premieredate" -> :premiere_date
+      "datecreated" -> :date_created
+      _ -> nil
+    end
+  end
+
+  defp clamp_non_neg(nil), do: nil
+  defp clamp_non_neg(n) when is_integer(n) and n < 0, do: 0
+  defp clamp_non_neg(n) when is_integer(n), do: n
+  defp clamp_non_neg(_), do: nil
 
   # Root with no concrete type filter → libraries as CollectionFolders.
   # When client asks for Movie/Series/etc (esp. recursive), query items instead.

@@ -88,9 +88,35 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     assert item["Name"] == "Big Buck Bunny"
     assert item["Type"] == "Movie"
     assert item["ProductionYear"] == 2008
+    assert item["ParentId"] == library.id
     assert item["IsFolder"] == false
     assert item["UserData"]["Played"] == false
     refute Map.has_key?(item, "Path")
+  end
+
+  test "GET /Users/:user_id/Items sorts by ProductionYear", %{
+    conn: conn,
+    user: user,
+    library: library
+  } do
+    {:ok, older, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{name: "Older", production_year: 1990})
+
+    {:ok, newer, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{name: "Newer", production_year: 2020})
+
+    conn =
+      get(conn, ~p"/Users/#{user.id}/Items", %{
+        "ParentId" => library.id,
+        "IncludeItemTypes" => "Movie",
+        "SortBy" => "ProductionYear"
+      })
+
+    assert %{"Items" => items, "TotalRecordCount" => 3} = json_response(conn, 200)
+    years = Enum.map(items, & &1["ProductionYear"])
+    assert years == Enum.sort(years)
+    assert hd(items)["Id"] == older.id
+    assert List.last(items)["Id"] == newer.id
   end
 
   test "GET /Users/:user_id/Items without ParentId returns libraries as folders", %{

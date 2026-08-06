@@ -34,7 +34,8 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "Overview" => item.overview,
       "IndexNumber" => item.index_number,
       "ParentIndexNumber" => item.parent_index_number,
-      "ParentId" => item.parent_id,
+      # Movies/root items use library id as ParentId so clients nest under the view.
+      "ParentId" => item.parent_id || item.library_id,
       "ProviderIds" => item.provider_ids || %{},
       "ImageTags" => %{},
       "UserData" => user_data(user_data)
