@@ -20,6 +20,14 @@ config :hivefin, HivefinWeb.Endpoint,
   secret_key_base: "Or3maWjDRkdhynhmuXmKAqYQtErvT6e/bKuEH92ehfC1jiiyvzinT+AqyjoItScL",
   server: false
 
+# Faster password hashing in tests
+config :argon2_elixir,
+  t_cost: 1,
+  m_cost: 8
+
+# Skip admin bootstrap on app start in tests
+config :hivefin, :bootstrap_admin_on_start, false
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

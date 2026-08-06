@@ -23,6 +23,13 @@ end
 config :hivefin, HivefinWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Admin bootstrap env (read by Hivefin.Accounts.bootstrap_admin/0 when no users exist):
+#   HIVEFIN_ADMIN_USER
+#   HIVEFIN_ADMIN_PASSWORD
+config :hivefin, :admin_bootstrap,
+  username: System.get_env("HIVEFIN_ADMIN_USER"),
+  password: System.get_env("HIVEFIN_ADMIN_PASSWORD")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
