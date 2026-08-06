@@ -266,6 +266,107 @@ defmodule Hivefin.Playback.SessionTest do
              })
   end
 
+  @tag :ffmpeg
+  test "same PlaySessionId with different paths does not share process" do
+    other =
+      Path.join(
+        System.tmp_dir!(),
+        "hivefin-session-other-#{System.unique_integer([:positive])}.mp4"
+      )
+
+    File.cp!(@fixture, other)
+    on_exit(fn -> File.rm(other) end)
+
+    id = "shared-client-id-#{System.unique_integer([:positive])}"
+
+    assert {:ok, pid1} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :remux,
+               input_path: @fixture
+             })
+
+    assert {:ok, pid2} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :remux,
+               input_path: other
+             })
+
+    refute pid1 == pid2
+    refute Process.alive?(pid1)
+    assert Process.alive?(pid2)
+    assert Session.info(pid2).input_path == Path.expand(other)
+
+    Session.stop(pid2)
+  end
+
+  @tag :ffmpeg
+  test "same PlaySessionId with different modes does not share process" do
+    id = "mode-mismatch-#{System.unique_integer([:positive])}"
+
+    assert {:ok, pid1} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :remux,
+               input_path: @fixture
+             })
+
+    assert {:ok, pid2} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :transcode,
+               input_path: @fixture,
+               encoder: :libx264,
+               height: 240
+             })
+
+    refute pid1 == pid2
+    refute Process.alive?(pid1)
+    assert Session.info(pid2).mode == :transcode
+
+    Session.stop(pid2)
+  end
+
+  test "registry_id binds client id to media identity" do
+    a =
+      Supervisor.registry_id("client-1", %{
+        user_id: "u1",
+        media_source_id: "ms1",
+        mode: :remux,
+        input_path: "/media/a.mp4"
+      })
+
+    b =
+      Supervisor.registry_id("client-1", %{
+        user_id: "u1",
+        media_source_id: "ms2",
+        mode: :remux,
+        input_path: "/media/a.mp4"
+      })
+
+    c =
+      Supervisor.registry_id("client-1", %{
+        user_id: "u2",
+        media_source_id: "ms1",
+        mode: :remux,
+        input_path: "/media/a.mp4"
+      })
+
+    same =
+      Supervisor.registry_id("client-1", %{
+        user_id: "u1",
+        media_source_id: "ms1",
+        mode: :remux,
+        input_path: "/media/a.mp4"
+      })
+
+    assert a == same
+    refute a == b
+    refute a == c
+    assert String.starts_with?(a, "ps_")
+  end
+
   defp os_pid_alive?(os_pid) when is_integer(os_pid) do
     case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
       {_, 0} -> true

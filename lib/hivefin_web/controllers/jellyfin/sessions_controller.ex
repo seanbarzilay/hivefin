@@ -10,13 +10,14 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   alias Hivefin.Library.UserData
 
   @doc """
-  `GET /Sessions` — active device sessions (from access tokens).
+  `GET /Sessions` — active device sessions for the current user (access tokens).
   """
   def index(conn, params) do
     device_id = blank_to_nil(params["deviceId"] || params["DeviceId"])
+    user = conn.assigns.current_user
 
     sessions =
-      Accounts.list_access_tokens(device_id: device_id)
+      Accounts.list_access_tokens(user_id: user.id, device_id: device_id)
       |> Enum.map(&SessionDto.from_access_token/1)
 
     json(conn, sessions)

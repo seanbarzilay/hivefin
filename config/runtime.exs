@@ -81,6 +81,34 @@ if rate = System.get_env("HIVEFIN_TMDB_RATE_LIMIT") do
   end
 end
 
+# Parses HIVEFIN_HTTP_IP / PHX_IP for Bandit. Defaults to loopback in prod.
+# Accepts dotted IPv4 (`127.0.0.1`, `0.0.0.0`) or comma-separated IPv6 ints.
+parse_http_ip = fn
+  nil ->
+    {127, 0, 0, 1}
+
+  "" ->
+    {127, 0, 0, 1}
+
+  "loopback" ->
+    {127, 0, 0, 1}
+
+  "localhost" ->
+    {127, 0, 0, 1}
+
+  "any" ->
+    {0, 0, 0, 0}
+
+  "0.0.0.0" ->
+    {0, 0, 0, 0}
+
+  ip when is_binary(ip) ->
+    case :inet.parse_address(String.to_charlist(ip)) do
+      {:ok, tuple} -> tuple
+      {:error, _} -> {127, 0, 0, 1}
+    end
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
@@ -115,14 +143,14 @@ if config_env() == :prod do
 
   config :hivefin, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # Default bind is loopback. Expose publicly only via reverse proxy on the
+  # same host, or set HIVEFIN_HTTP_IP / PHX_IP explicitly (e.g. 0.0.0.0).
+  http_ip = parse_http_ip.(System.get_env("HIVEFIN_HTTP_IP") || System.get_env("PHX_IP"))
+
   config :hivefin, HivefinWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      ip: http_ip
     ],
     secret_key_base: secret_key_base
 

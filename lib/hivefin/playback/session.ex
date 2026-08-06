@@ -260,6 +260,7 @@ defmodule Hivefin.Playback.Session do
      %{
        id: state.id,
        mode: state.mode,
+       input_path: state.input_path,
        encoder: state.encoder,
        status: state.status,
        temp_dir: state.temp_dir,

@@ -93,4 +93,37 @@ defmodule Hivefin.Library.MediaPathTest do
     claims = %{item_id: movie.id, media_source_id: source.id}
     assert {:error, :not_found} = LibraryContext.media_path_for_item(movie.id, claims)
   end
+
+  test "rejects symlink under library that points outside root", %{
+    library: library,
+    movie: movie,
+    source: source
+  } do
+    outside =
+      Path.join(
+        System.tmp_dir!(),
+        "hivefin-symlink-target-#{System.unique_integer([:positive])}.mp4"
+      )
+
+    File.cp!(@fixture_mp4, outside)
+
+    link =
+      Path.join(library.path, "escape-link-#{System.unique_integer([:positive])}.mp4")
+
+    # Clean link first if leftover
+    File.rm(link)
+    File.ln_s!(outside, link)
+
+    on_exit(fn ->
+      File.rm(link)
+      File.rm(outside)
+    end)
+
+    source
+    |> Ecto.Changeset.change(%{path: Path.expand(link)})
+    |> Repo.update!()
+
+    claims = %{item_id: movie.id, media_source_id: source.id}
+    assert {:error, :forbidden} = LibraryContext.media_path_for_item(movie.id, claims)
+  end
 end

@@ -123,11 +123,60 @@ defmodule Hivefin.Scanner.ScannerTest do
   end
 
   test "rejects media paths outside library root" do
-    assert PathRules.under_root?("/media/movies", "/media/movies/foo.mp4")
-    assert PathRules.under_root?("/media/movies", "/media/movies")
-    refute PathRules.under_root?("/media/movies", "/media/other/foo.mp4")
-    refute PathRules.under_root?("/media/movies", "/media/movies_backup/foo.mp4")
-    refute PathRules.under_root?("/media/movies", "/etc/passwd")
+    root =
+      Path.join(System.tmp_dir!(), "hivefin-root-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(root)
+    inside = Path.join(root, "foo.mp4")
+    File.write!(inside, "x")
+
+    outside_dir =
+      Path.join(System.tmp_dir!(), "hivefin-outside-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(outside_dir)
+    outside = Path.join(outside_dir, "secret.mp4")
+    File.write!(outside, "y")
+
+    on_exit(fn ->
+      File.rm_rf(root)
+      File.rm_rf(outside_dir)
+    end)
+
+    assert PathRules.under_root?(root, inside)
+    assert PathRules.under_root?(root, root)
+    refute PathRules.under_root?(root, outside)
+    refute PathRules.under_root?(root, Path.join(root <> "_backup", "foo.mp4"))
+    refute PathRules.under_root?(root, "/etc/passwd")
+  end
+
+  test "rejects symlink under library root that escapes outside" do
+    root =
+      Path.join(System.tmp_dir!(), "hivefin-symlink-root-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(root)
+
+    outside =
+      Path.join(
+        System.tmp_dir!(),
+        "hivefin-symlink-out-#{System.unique_integer([:positive])}.mp4"
+      )
+
+    File.write!(outside, "escaped")
+
+    link = Path.join(root, "evil.mp4")
+    File.ln_s!(outside, link)
+
+    on_exit(fn ->
+      File.rm_rf(root)
+      File.rm(outside)
+    end)
+
+    # Path is lexically under root, but realpath escapes.
+    assert String.starts_with?(Path.expand(link), Path.expand(root))
+    refute PathRules.under_root?(root, link)
+    assert {:ok, real} = PathRules.realpath(link)
+    assert {:ok, outside_real} = PathRules.realpath(outside)
+    assert real == outside_real
   end
 
   test "create_library requires existing directory" do

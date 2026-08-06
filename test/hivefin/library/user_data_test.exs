@@ -85,4 +85,20 @@ defmodule Hivefin.Library.UserDataTest do
     assert Map.has_key?(map, movie.id)
     assert map[movie.id].playback_position_ticks == 50
   end
+
+  test "partial upsert does not reset unmentioned fields", %{user: user, movie: movie} do
+    assert {:ok, _} =
+             UserData.upsert(user.id, movie.id, %{
+               playback_position_ticks: 999,
+               is_favorite: true,
+               play_count: 3
+             })
+
+    assert {:ok, ud} =
+             UserData.upsert(user.id, movie.id, %{playback_position_ticks: 1000})
+
+    assert ud.playback_position_ticks == 1000
+    assert ud.is_favorite == true
+    assert ud.play_count == 3
+  end
 end

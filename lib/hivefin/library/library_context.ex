@@ -251,6 +251,7 @@ defmodule Hivefin.Library.LibraryContext do
           is_nil(library) ->
             {:error, :not_found}
 
+          # under_root? follows symlinks; escape links outside the library fail.
           not PathRules.under_root?(library.path, path) ->
             {:error, :forbidden}
 
@@ -258,7 +259,10 @@ defmodule Hivefin.Library.LibraryContext do
             {:error, :not_found}
 
           true ->
-            {:ok, Path.expand(path)}
+            case PathRules.realpath(path) do
+              {:ok, real} -> {:ok, real}
+              {:error, _} -> {:ok, Path.expand(path)}
+            end
         end
 
       %MediaSource{} ->

@@ -68,7 +68,15 @@ Related env:
 
 ## Reverse proxy and TLS
 
-Hivefin binds HTTP (Bandit). Terminate TLS at the proxy in production.
+Hivefin binds HTTP (Bandit). **Production default bind is loopback** (`127.0.0.1`)
+so the app is not exposed on all interfaces unless you opt in.
+
+| Variable | Default (prod) | Notes |
+|----------|----------------|-------|
+| `HIVEFIN_HTTP_IP` or `PHX_IP` | `127.0.0.1` | Dotted IPv4/IPv6. Use `0.0.0.0` / `any` only when you intentionally listen on all interfaces (prefer reverse-proxy on the same host instead). |
+| `PORT` | `4000` | HTTP port |
+
+Terminate TLS at the proxy in production.
 
 Example **Caddy**:
 
@@ -113,7 +121,8 @@ Restore order: secrets + config → Postgres → start app → confirm `/readyz`
 |----------|---------|
 | `DATABASE_URL` | Postgres (required in prod) |
 | `SECRET_KEY_BASE` | Phoenix secrets (required in prod) |
-| `PHX_HOST` / `PORT` / `PHX_SERVER` | HTTP bind and release server flag |
+| `PHX_HOST` / `PORT` / `PHX_SERVER` | Public host, port, release server flag |
+| `HIVEFIN_HTTP_IP` / `PHX_IP` | Prod listen address (default loopback) |
 | `HIVEFIN_ADMIN_USER` / `HIVEFIN_ADMIN_PASSWORD` | Bootstrap first admin |
 | `HIVEFIN_FFMPEG_PATH` / `HIVEFIN_FFPROBE_PATH` | Media binaries |
 | `HIVEFIN_HW_ACCEL` | `auto` \| `videotoolbox` \| `nvenc` \| `vaapi` \| `none` |

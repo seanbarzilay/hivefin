@@ -64,11 +64,32 @@ defmodule Hivefin.Library.UserData do
     |> foreign_key_constraint(:item_id)
   end
 
+  @allowed_attr_keys [
+    :playback_position_ticks,
+    :played_percentage,
+    :played,
+    :play_count,
+    :is_favorite,
+    :last_played_date
+  ]
+
+  @string_key_map %{
+    "playback_position_ticks" => :playback_position_ticks,
+    "played_percentage" => :played_percentage,
+    "played" => :played,
+    "play_count" => :play_count,
+    "is_favorite" => :is_favorite,
+    "last_played_date" => :last_played_date
+  }
+
   @doc """
-  Inserts or updates UserData for a user/item pair.
+  Inserts or updates UserData for a user/item pair (atomic `ON CONFLICT`).
 
   attrs: `:playback_position_ticks`, `:played_percentage`, `:played`,
   `:last_played_date`, `:play_count`, `:is_favorite`.
+
+  Only keys present in `attrs` are replaced on conflict so concurrent partial
+  progress updates cannot clobber unrelated fields with schema defaults.
   """
   def upsert(user_id, item_id, attrs)
       when is_binary(user_id) and is_binary(item_id) and is_map(attrs) do
@@ -77,16 +98,48 @@ defmodule Hivefin.Library.UserData do
       |> normalize_attrs()
       |> maybe_default_last_played_date()
 
-    case get(user_id, item_id) do
-      nil ->
-        %__MODULE__{}
-        |> changeset(Map.merge(attrs, %{user_id: user_id, item_id: item_id}))
-        |> Repo.insert()
+    cs =
+      %__MODULE__{}
+      |> changeset(Map.merge(attrs, %{user_id: user_id, item_id: item_id}))
 
-      %__MODULE__{} = existing ->
-        existing
-        |> changeset(attrs)
-        |> Repo.update()
+    if cs.valid? do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      changes = Map.take(cs.changes, @allowed_attr_keys ++ [:user_id, :item_id])
+
+      row =
+        %{
+          id: Ecto.UUID.generate(),
+          user_id: user_id,
+          item_id: item_id,
+          playback_position_ticks: 0,
+          played_percentage: 0.0,
+          played: false,
+          play_count: 0,
+          is_favorite: false,
+          last_played_date: nil,
+          inserted_at: now,
+          updated_at: now
+        }
+        |> Map.merge(Map.drop(changes, [:user_id, :item_id]))
+        |> Map.put(:updated_at, now)
+
+      replace_fields =
+        changes
+        |> Map.drop([:user_id, :item_id])
+        |> Map.keys()
+        |> Kernel.++([:updated_at])
+        |> Enum.uniq()
+
+      case Repo.insert_all(__MODULE__, [row],
+             on_conflict: {:replace, replace_fields},
+             conflict_target: [:user_id, :item_id],
+             returning: true
+           ) do
+        {1, [ud]} -> {:ok, ud}
+        {_, _} -> {:error, :upsert_failed}
+      end
+    else
+      {:error, cs}
     end
   end
 
@@ -149,24 +202,6 @@ defmodule Hivefin.Library.UserData do
   defp clamp_non_neg(n) when is_integer(n) and n < 0, do: 0
   defp clamp_non_neg(n) when is_integer(n), do: n
   defp clamp_non_neg(_), do: nil
-
-  @allowed_attr_keys [
-    :playback_position_ticks,
-    :played_percentage,
-    :played,
-    :play_count,
-    :is_favorite,
-    :last_played_date
-  ]
-
-  @string_key_map %{
-    "playback_position_ticks" => :playback_position_ticks,
-    "played_percentage" => :played_percentage,
-    "played" => :played,
-    "play_count" => :play_count,
-    "is_favorite" => :is_favorite,
-    "last_played_date" => :last_played_date
-  }
 
   defp normalize_attrs(attrs) do
     attrs

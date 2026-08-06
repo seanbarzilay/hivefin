@@ -87,6 +87,35 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     assert Enum.any?(body, &(&1["Id"] == access_token.id))
   end
 
+  test "GET /Sessions is scoped to the current user", %{
+    conn: conn,
+    user: user,
+    access_token: access_token
+  } do
+    {:ok, other} =
+      Hivefin.Accounts.create_user(%{
+        name: "Other",
+        username: "other-sessions-#{System.unique_integer([:positive])}",
+        password: "password1",
+        admin: false
+      })
+
+    {:ok, _other_token, other_access} =
+      Hivefin.Accounts.issue_token(other, %{
+        device_id: "other-device",
+        device_name: "Other",
+        client: "Other Client",
+        client_version: "1.0"
+      })
+
+    conn = get(conn, ~p"/Sessions")
+    body = json_response(conn, 200)
+
+    assert Enum.all?(body, &(&1["UserId"] == user.id))
+    assert Enum.any?(body, &(&1["Id"] == access_token.id))
+    refute Enum.any?(body, &(&1["Id"] == other_access.id))
+  end
+
   test "POST /Sessions/Capabilities returns 204", %{conn: conn} do
     conn =
       post(conn, ~p"/Sessions/Capabilities", %{

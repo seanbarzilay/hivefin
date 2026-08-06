@@ -43,6 +43,7 @@ curl -s http://127.0.0.1:4000/readyz
 | `DATABASE_URL` | Postgres URL (required in prod) |
 | `SECRET_KEY_BASE` | Phoenix secret (required in prod) |
 | `PORT` / `PHX_HOST` / `PHX_SERVER` | HTTP port, public host, enable server in releases |
+| `HIVEFIN_HTTP_IP` / `PHX_IP` | Prod bind address (default `127.0.0.1`; set `0.0.0.0` only if intentional) |
 | `HIVEFIN_ADMIN_USER` / `HIVEFIN_ADMIN_PASSWORD` | Bootstrap first admin when DB has no users |
 | `HIVEFIN_FFMPEG_PATH` / `HIVEFIN_FFPROBE_PATH` | Override media binaries |
 | `HIVEFIN_HW_ACCEL` | `auto`, `videotoolbox`, `nvenc`, `vaapi`, or `none` |

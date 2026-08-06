@@ -19,6 +19,8 @@ defmodule HivefinWeb.Jellyfin.VideoController do
          true <- claims.item_id == item_id,
          true <- media_source_matches?(claims, params),
          {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
+      conn = assign(conn, :stream_claims, claims)
+
       cond do
         static_request?(params) ->
           send_media_file(conn, path)
@@ -63,7 +65,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
          true <- claims.item_id == item_id,
          true <- media_source_matches?(claims, params),
          {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
-      stream_ffmpeg(conn, path, params, :transcode)
+      conn
+      |> assign(:stream_claims, claims)
+      |> then(&stream_ffmpeg(&1, path, params, :transcode))
     else
       {:error, :expired} ->
         conn |> put_status(:unauthorized) |> json(%{"error" => "token_expired"})
@@ -86,7 +90,22 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   end
 
   defp stream_ffmpeg(conn, path, params, mode) when mode in [:remux, :transcode] do
-    session_id = play_session_id(params)
+    client_session_id = play_session_id(params)
+
+    # Bind registry key to user + media source + path + mode so a recycled
+    # client PlaySessionId cannot share an FFmpeg process across items/users.
+    claims = conn.assigns[:stream_claims] || %{}
+
+    session_id =
+      Supervisor.registry_id(client_session_id, %{
+        user_id: Map.get(claims, :user_id),
+        media_source_id:
+          Map.get(claims, :media_source_id) ||
+            params["MediaSourceId"] ||
+            params["mediaSourceId"],
+        mode: mode,
+        input_path: path
+      })
 
     attrs =
       case mode do
