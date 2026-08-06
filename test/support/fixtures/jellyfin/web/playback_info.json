@@ -1,0 +1,39 @@
+{
+  "MediaSources": [
+    {
+      "Id": "33333333-4444-4555-8666-777777777777",
+      "ItemId": "22222222-3333-4444-8555-666666666666",
+      "Container": "mp4",
+      "Protocol": "Http",
+      "Type": "Default",
+      "SupportsDirectPlay": true,
+      "SupportsDirectStream": true,
+      "SupportsTranscoding": false,
+      "IsRemote": false,
+      "ReadAtNativeFramerate": false,
+      "Formats": [],
+      "RequiredHttpHeaders": {},
+      "DirectStreamUrl": "/Videos/22222222-3333-4444-8555-666666666666/stream?MediaSourceId=33333333-4444-4555-8666-777777777777&Static=true&api_key=REDACTED_TOKEN",
+      "MediaStreams": [
+        {
+          "Index": 0,
+          "Type": "Video",
+          "Codec": "h264",
+          "Width": 1280,
+          "Height": 720,
+          "IsDefault": true,
+          "IsForced": false
+        },
+        {
+          "Index": 1,
+          "Type": "Audio",
+          "Codec": "aac",
+          "Channels": 2,
+          "IsDefault": true,
+          "IsForced": false
+        }
+      ]
+    }
+  ],
+  "PlaySessionId": "44444444-5555-4666-8777-888888888888"
+}

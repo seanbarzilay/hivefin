@@ -1,0 +1,17 @@
+{
+  "LocalAddress": "http://127.0.0.1:8096",
+  "ServerName": "Jellyfin Server",
+  "Version": "10.9.11",
+  "ProductName": "Jellyfin Server",
+  "Id": "00000000-0000-4000-8000-000000000001",
+  "StartupWizardCompleted": true,
+  "OperatingSystem": "Linux",
+  "OperatingSystemDisplayName": "Linux",
+  "CanSelfRestart": false,
+  "CanLaunchWebBrowser": false,
+  "HasPendingRestart": false,
+  "IsShuttingDown": false,
+  "SupportsLibraryMonitor": true,
+  "WebSocketPortNumber": 8096,
+  "CompletedInstallations": []
+}

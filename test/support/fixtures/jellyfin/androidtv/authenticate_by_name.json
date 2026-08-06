@@ -1,0 +1,29 @@
+{
+  "User": {
+    "Name": "Demo User",
+    "Id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "ServerId": "00000000-0000-4000-8000-000000000001",
+    "HasPassword": true,
+    "HasConfiguredPassword": true,
+    "HasConfiguredEasyPassword": false,
+    "EnableAutoLogin": false,
+    "Configuration": {},
+    "Policy": {
+      "IsAdministrator": true,
+      "IsHidden": false,
+      "IsDisabled": false,
+      "EnableAllFolders": true,
+      "EnableRemoteAccess": true
+    }
+  },
+  "AccessToken": "REDACTED_TOKEN",
+  "ServerId": "00000000-0000-4000-8000-000000000001",
+  "SessionInfo": {
+    "UserId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "UserName": "Demo User",
+    "Client": "Android TV",
+    "DeviceName": "AndroidTV",
+    "DeviceId": "androidtv-device-id-redacted",
+    "ApplicationVersion": "0.17.0"
+  }
+}

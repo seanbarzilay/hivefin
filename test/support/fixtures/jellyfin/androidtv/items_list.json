@@ -1,0 +1,25 @@
+{
+  "Items": [
+    {
+      "Name": "Big Buck Bunny",
+      "Id": "22222222-3333-4444-8555-666666666666",
+      "ServerId": "00000000-0000-4000-8000-000000000001",
+      "Type": "Movie",
+      "IsFolder": false,
+      "SortName": "big buck bunny",
+      "ProductionYear": 2008,
+      "ParentId": "11111111-2222-4333-8444-555555555555",
+      "ProviderIds": {},
+      "ImageTags": {},
+      "UserData": {
+        "PlaybackPositionTicks": 0,
+        "PlayCount": 0,
+        "IsFavorite": false,
+        "Played": false,
+        "PlayedPercentage": 0
+      }
+    }
+  ],
+  "TotalRecordCount": 1,
+  "StartIndex": 0
+}
