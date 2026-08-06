@@ -67,6 +67,60 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     end
   end
 
+  test "season DTO includes SeriesId and IndexNumber" do
+    series_id = Ecto.UUID.generate()
+
+    season = %Item{
+      id: Ecto.UUID.generate(),
+      library_id: Ecto.UUID.generate(),
+      parent_id: series_id,
+      name: "Season 1",
+      type: :season,
+      index_number: 1,
+      sort_name: "season 1"
+    }
+
+    dto = BaseItem.from_item(season)
+    assert dto["Type"] == "Season"
+    assert dto["SeriesId"] == series_id
+    assert dto["IndexNumber"] == 1
+    assert dto["ParentId"] == series_id
+    refute Map.has_key?(dto, "SeasonId")
+  end
+
+  test "episode DTO includes SeriesId, SeasonId, IndexNumber, ParentIndexNumber" do
+    series_id = Ecto.UUID.generate()
+    season_id = Ecto.UUID.generate()
+
+    season = %Item{
+      id: season_id,
+      parent_id: series_id,
+      type: :season,
+      name: "Season 1",
+      index_number: 1
+    }
+
+    episode = %Item{
+      id: Ecto.UUID.generate(),
+      library_id: Ecto.UUID.generate(),
+      parent_id: season_id,
+      parent: season,
+      name: "Episode 2",
+      type: :episode,
+      index_number: 2,
+      parent_index_number: 1,
+      sort_name: "episode 2"
+    }
+
+    dto = BaseItem.from_item(episode)
+    assert dto["Type"] == "Episode"
+    assert dto["SeasonId"] == season_id
+    assert dto["SeriesId"] == series_id
+    assert dto["IndexNumber"] == 2
+    assert dto["ParentIndexNumber"] == 1
+    assert dto["ParentId"] == season_id
+  end
+
   test "maps library as CollectionFolder" do
     id = Ecto.UUID.generate()
     library = %Library{id: id, name: "Movies", type: :movies, path: "/media/movies"}

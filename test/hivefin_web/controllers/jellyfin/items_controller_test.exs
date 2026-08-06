@@ -256,6 +256,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
       assert item["Id"] == season.id
       assert item["Type"] == "Season"
       assert item["IndexNumber"] == 1
+      assert item["SeriesId"] == series.id
       assert item["IsFolder"] == true
       assert item["ParentId"] == series.id
     end
@@ -263,6 +264,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     test "season ParentId returns episodes", %{
       conn: conn,
       user: user,
+      series: series,
       season: season,
       episode: episode
     } do
@@ -277,8 +279,43 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
       assert item["Type"] == "Episode"
       assert item["IndexNumber"] == 2
       assert item["ParentIndexNumber"] == 1
+      assert item["SeasonId"] == season.id
+      assert item["SeriesId"] == series.id
       assert item["IsFolder"] == false
       assert item["ParentId"] == season.id
+    end
+
+    test "SortBy=IndexNumber orders Episode 2 before Episode 10", %{
+      conn: conn,
+      user: user,
+      series: series,
+      season: season
+    } do
+      {:ok, ep10, :created} =
+        LibraryContext.find_or_create_episode(series.library_id, season.id, %{
+          name: "Episode 10",
+          index_number: 10,
+          parent_index_number: 1
+        })
+
+      {:ok, ep2, _} =
+        LibraryContext.find_or_create_episode(series.library_id, season.id, %{
+          name: "Episode 2",
+          index_number: 2,
+          parent_index_number: 1
+        })
+
+      conn =
+        get(conn, ~p"/Users/#{user.id}/Items", %{
+          "ParentId" => season.id,
+          "SortBy" => "IndexNumber"
+        })
+
+      assert %{"Items" => items, "TotalRecordCount" => 2} = json_response(conn, 200)
+      assert Enum.map(items, & &1["IndexNumber"]) == [2, 10]
+      assert Enum.map(items, & &1["Id"]) == [ep2.id, ep10.id]
+      # String SortName would put "episode 10" before "episode 2"
+      refute Enum.map(items, & &1["Name"]) == ["Episode 10", "Episode 2"]
     end
 
     test "GET /Shows/:series_id/Seasons", %{

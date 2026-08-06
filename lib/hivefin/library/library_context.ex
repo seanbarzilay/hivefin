@@ -55,10 +55,6 @@ defmodule Hivefin.Library.LibraryContext do
     |> Repo.all()
   end
 
-  def get_item(id) do
-    Repo.get(Item, id)
-  end
-
   @doc """
   Lists browseable children for Jellyfin Items queries.
 
@@ -73,8 +69,9 @@ defmodule Hivefin.Library.LibraryContext do
   - `:recursive` — when true with item types, search whole library/tree
   - `:limit` — max rows (nil = no limit); negative values clamped to 0
   - `:start_index` — offset (default 0); negative values clamped to 0
-  - `:sort_by` — jellyfin field name(s): SortName (default), Name, ProductionYear,
-    PremiereDate, DateCreated (comma-separated; first supported field wins)
+  - `:sort_by` — jellyfin field name(s): SortName (default), Name, IndexNumber,
+    ProductionYear, PremiereDate, DateCreated (comma-separated; first supported field wins).
+    When omitted and parent is a series or season, defaults to IndexNumber.
   - `:preload_media_sources` — preload sources + streams (default false)
 
   Returns `{entries, total_count}` where entries are `%Library{}` or `%Item{}`.
@@ -84,16 +81,19 @@ defmodule Hivefin.Library.LibraryContext do
     recursive? = truthy?(Keyword.get(opts, :recursive, false))
     limit = clamp_non_neg(Keyword.get(opts, :limit))
     start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
-    sort_by = normalize_sort_by(Keyword.get(opts, :sort_by))
+    sort_raw = Keyword.get(opts, :sort_by)
     preload_sources? = Keyword.get(opts, :preload_media_sources, false)
 
     cond do
       is_nil(parent_id) and libraries_as_root?(include_types, recursive?) ->
+        sort_by = normalize_sort_by(sort_raw)
         libraries = list_libraries() |> sort_libraries(sort_by)
         total = length(libraries)
         {paginate(libraries, start_index, limit), total}
 
       is_nil(parent_id) ->
+        sort_by = normalize_sort_by(sort_raw)
+
         query =
           Item
           |> maybe_filter_types(include_types)
@@ -102,6 +102,8 @@ defmodule Hivefin.Library.LibraryContext do
         page_items(query, start_index, limit, preload_sources?)
 
       library = get_library(parent_id) ->
+        sort_by = normalize_sort_by(sort_raw)
+
         query =
           Item
           |> where([i], i.library_id == ^library.id)
@@ -112,6 +114,8 @@ defmodule Hivefin.Library.LibraryContext do
         page_items(query, start_index, limit, preload_sources?)
 
       item = get_item(parent_id) ->
+        sort_by = child_sort_for_parent(item, sort_raw)
+
         query =
           Item
           |> where([i], i.library_id == ^item.library_id)
@@ -126,13 +130,20 @@ defmodule Hivefin.Library.LibraryContext do
     end
   end
 
+  def get_item(id) do
+    Item
+    |> where([i], i.id == ^id)
+    |> preload(:parent)
+    |> Repo.one()
+  end
+
   @doc """
   Gets an item with media sources and streams preloaded.
   """
   def get_item_with_sources(id) do
     Item
     |> where([i], i.id == ^id)
-    |> preload(media_sources: :media_streams)
+    |> preload([:parent, media_sources: :media_streams])
     |> Repo.one()
   end
 
@@ -147,7 +158,8 @@ defmodule Hivefin.Library.LibraryContext do
   def list_episodes_for_series(%Item{type: :series, id: series_id}, opts) do
     limit = clamp_non_neg(Keyword.get(opts, :limit))
     start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
-    sort_by = normalize_sort_by(Keyword.get(opts, :sort_by))
+    sort_raw = Keyword.get(opts, :sort_by)
+    sort_by = if blank_sort?(sort_raw), do: :index_number, else: normalize_sort_by(sort_raw)
     preload_sources? = Keyword.get(opts, :preload_media_sources, false)
 
     season_ids =
@@ -517,6 +529,10 @@ defmodule Hivefin.Library.LibraryContext do
   defp maybe_filter_types(query, []), do: query
   defp maybe_filter_types(query, types), do: where(query, [i], i.type in ^types)
 
+  defp apply_item_sort(query, :index_number) do
+    order_by(query, [i], asc_nulls_last: i.index_number, asc: i.sort_name, asc: i.name)
+  end
+
   defp apply_item_sort(query, :production_year) do
     order_by(query, [i], asc_nulls_last: i.production_year, asc: i.sort_name, asc: i.name)
   end
@@ -536,6 +552,18 @@ defmodule Hivefin.Library.LibraryContext do
   defp apply_item_sort(query, _sort_name) do
     order_by(query, [i], asc: i.sort_name, asc: i.name)
   end
+
+  # Seasons under series / episodes under season default to numeric IndexNumber.
+  defp child_sort_for_parent(%Item{type: type}, sort_raw)
+       when type in [:series, :season] and sort_raw in [nil, ""] do
+    :index_number
+  end
+
+  defp child_sort_for_parent(_parent, sort_raw), do: normalize_sort_by(sort_raw)
+
+  defp blank_sort?(nil), do: true
+  defp blank_sort?(""), do: true
+  defp blank_sort?(_), do: false
 
   defp sort_libraries(libraries, :name) do
     Enum.sort_by(libraries, & &1.name)
@@ -577,6 +605,7 @@ defmodule Hivefin.Library.LibraryContext do
     case field |> String.trim() |> String.downcase() do
       "sortname" -> :sort_name
       "name" -> :name
+      "indexnumber" -> :index_number
       "productionyear" -> :production_year
       "premieredate" -> :premiere_date
       "datecreated" -> :date_created
@@ -608,12 +637,14 @@ defmodule Hivefin.Library.LibraryContext do
 
   defp page_items(query, start_index, limit, preload_sources?) do
     total = Repo.aggregate(query, :count, :id)
+    preloads = item_preloads(preload_sources?)
 
     query =
       query
       |> offset(^start_index)
       |> maybe_limit(limit)
-      |> maybe_preload_sources(preload_sources?)
+      # Parent association needed for Episode SeriesId (season.parent_id).
+      |> preload(^preloads)
 
     {Repo.all(query), total}
   end
@@ -622,11 +653,8 @@ defmodule Hivefin.Library.LibraryContext do
   defp maybe_limit(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
   defp maybe_limit(query, _), do: query
 
-  defp maybe_preload_sources(query, true) do
-    preload(query, media_sources: :media_streams)
-  end
-
-  defp maybe_preload_sources(query, _), do: query
+  defp item_preloads(true), do: [:parent, media_sources: :media_streams]
+  defp item_preloads(_), do: [:parent]
 
   defp paginate(list, start_index, nil) when start_index <= 0, do: list
 

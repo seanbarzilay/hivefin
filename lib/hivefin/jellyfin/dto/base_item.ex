@@ -36,6 +36,8 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "ParentIndexNumber" => item.parent_index_number,
       # Movies/root items use library id as ParentId so clients nest under the view.
       "ParentId" => item.parent_id || item.library_id,
+      "SeriesId" => series_id(item),
+      "SeasonId" => season_id(item),
       "ProviderIds" => item.provider_ids || %{},
       "ImageTags" => %{},
       "UserData" => user_data(user_data)
@@ -168,6 +170,17 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   defp folder?(:series), do: true
   defp folder?(:season), do: true
   defp folder?(_), do: false
+
+  # Season parent is the series; episode's series is season.parent_id when parent preloaded.
+  defp series_id(%Item{type: :season, parent_id: parent_id}), do: parent_id
+
+  defp series_id(%Item{type: :episode, parent: %Item{parent_id: series_id}}), do: series_id
+
+  defp series_id(%Item{type: :episode, parent: %Ecto.Association.NotLoaded{}}), do: nil
+  defp series_id(_), do: nil
+
+  defp season_id(%Item{type: :episode, parent_id: parent_id}), do: parent_id
+  defp season_id(_), do: nil
 
   defp user_data(nil), do: default_user_data()
   defp user_data(%{} = data), do: Map.merge(default_user_data(), stringify_keys(data))
