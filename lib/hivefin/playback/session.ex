@@ -10,7 +10,8 @@ defmodule Hivefin.Playback.Session do
   - Monitors HTTP consumer processes (`attach_consumer/2`); last consumer exit
     starts idle countdown.
   - Self-stops after configurable idle with no consumers (`:session_idle_ms`,
-    default 60s).
+    default 60s). FFmpeg stdout activity does **not** refresh idle once
+    unattended (no consumers / waiters).
   - Waiter timeouts are tracked server-side so GenServer.call timeouts do not
     leave orphaned waiters; clients should still `stop/1` on their own timeout.
   - On terminate: SIGTERM/SIGKILL FFmpeg and remove temp dir **only if under**
@@ -645,9 +646,16 @@ defmodule Hivefin.Playback.Session do
     end
   end
 
+  # Force (re)arm idle — used when last consumer leaves or waiters drain.
   defp schedule_idle(state) do
     state = cancel_idle(state)
+    arm_idle(state)
+  end
 
+  # Arm idle only if unattended and no timer is already running.
+  defp arm_idle(%{idle_timer: tref} = state) when is_reference(tref), do: state
+
+  defp arm_idle(state) do
     if map_size(state.consumers) == 0 and state.waiters == [] do
       tref = Process.send_after(self(), :idle_timeout, idle_ms())
       %{state | idle_timer: tref}
@@ -663,13 +671,19 @@ defmodule Hivefin.Playback.Session do
 
   defp cancel_idle(state), do: %{state | idle_timer: nil}
 
+  # Activity bookkeeping. Media/port data must NOT refresh idle when there are
+  # no consumers and no waiters — otherwise a killed HTTP client leaves FFmpeg
+  # holding a concurrency slot until the encode finishes.
   defp touch(state) do
     state = %{state | last_activity_ms: now_ms()}
-    # Activity with consumers/waiters: no idle. Without them, reschedule.
-    if map_size(state.consumers) == 0 and state.waiters == [] do
-      schedule_idle(state)
-    else
-      cancel_idle(state)
+
+    cond do
+      map_size(state.consumers) > 0 or state.waiters != [] ->
+        cancel_idle(state)
+
+      true ->
+        # Unattended: leave an existing idle timer alone; arm only if missing.
+        arm_idle(state)
     end
   end
 

@@ -195,6 +195,66 @@ defmodule Hivefin.Playback.SessionTest do
     assert Supervisor.count_sessions() == 0
   end
 
+  @tag :ffmpeg
+  test "killed consumer reclaims slot even while FFmpeg still producing" do
+    # Short idle; media/port activity must not refresh the countdown.
+    Application.put_env(:hivefin, :session_idle_ms, 300)
+
+    id = "test-idle-kill-#{System.unique_integer([:positive])}"
+
+    assert {:ok, pid} =
+             Supervisor.start_session(%{
+               id: id,
+               mode: :transcode,
+               input_path: @fixture,
+               encoder: :libx264,
+               height: 240
+             })
+
+    parent = self()
+
+    consumer =
+      spawn(fn ->
+        Session.attach_consumer(pid, self())
+        send(parent, :attached)
+        # Stay alive until killed — simulates HTTP process dying with :kill
+        # (no try/after Session.stop).
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive :attached, 1_000
+    assert {:ok, :pipe} = Session.await_ready(pid, 20_000)
+    assert {:ok, _chunk} = Session.read_chunk(pid, 10_000)
+
+    # Brutal consumer death (no cooperative stop)
+    Process.exit(consumer, :kill)
+    wait_until(fn -> not Process.alive?(consumer) end, 1_000)
+
+    # Polling info/activity while unattended must not keep the session alive.
+    started = System.monotonic_time(:millisecond)
+
+    wait_until(
+      fn ->
+        if Process.alive?(pid) do
+          try do
+            _ = Session.info(pid)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+
+        not Process.alive?(pid)
+      end,
+      2_000
+    )
+
+    elapsed = System.monotonic_time(:millisecond) - started
+    refute Process.alive?(pid)
+    assert Supervisor.count_sessions() == 0
+    # Should exit on idle (~300ms), not wait for full encode; allow slack.
+    assert elapsed < 1_500
+  end
+
   test "start_session rejects missing input" do
     id = "test-missing-#{System.unique_integer([:positive])}"
 
