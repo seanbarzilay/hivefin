@@ -64,11 +64,23 @@ services:
       HIVEFIN_MAX_TRANSCODES: ${HIVEFIN_MAX_TRANSCODES:-2}
       HIVEFIN_IMAGE_CACHE_DIR: /data/image-cache
       HIVEFIN_TRANSCODE_DIR: /data/transcode
+      # Required for NVENC inside the container (with the devices block below).
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
     volumes:
       # Media libraries (read-only recommended). Map host path → /media in container.
       - ${MEDIA_HOST_PATH:-./media}:/media:ro
       - hivefin_image_cache:/data/image-cache
       - hivefin_transcode:/data/transcode
+    # Pass host NVIDIA GPU through for h264_nvenc (HIVEFIN_HW_ACCEL=auto|nvenc).
+    # Needs nvidia-container-toolkit on the host. Omit / set count: 0 if no GPU.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/readyz"]
       interval: 30s
