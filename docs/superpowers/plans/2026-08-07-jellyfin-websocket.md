@@ -1060,7 +1060,7 @@ git commit -m "fix: SessionInfoDto carries all SDK-required fields"
     end
 
     test "SessionsStart pushes a Sessions message and records the subscription" do
-      s = state()
+      s = persisted_state()
       {:push, _, s} = JellyfinSocket.init(s)
 
       assert {:push, {:text, json}, new_state} =
@@ -1071,7 +1071,8 @@ git commit -m "fix: SessionInfoDto carries all SDK-required fields"
 
       decoded = Jason.decode!(json)
       assert decoded["MessageType"] == "Sessions"
-      assert is_list(decoded["Data"])
+      # Not just is_list/1 — that is satisfied by [], which hides an empty payload.
+      assert decoded["Data"] != []
       assert MapSet.member?(new_state.subscriptions, "Sessions")
     end
 
@@ -1112,12 +1113,18 @@ git commit -m "fix: SessionInfoDto carries all SDK-required fields"
       assert Jason.decode!(json)["MessageType"] == "Sessions"
     end
 
+    # Uses persisted_state/0, not state/0: list_access_tokens/1 filters by a real
+    # user_id, so an unpersisted UUID returns [] and the loop below never runs —
+    # the test would then pass even with a required field deleted.
     test "every session in a Sessions push carries the required fields" do
-      s = state()
+      s = persisted_state()
       {:push, _, s} = JellyfinSocket.init(s)
       {:push, {:text, json}, _} = JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
 
-      for session <- Jason.decode!(json)["Data"],
+      sessions = Jason.decode!(json)["Data"]
+      assert sessions != [], "expected at least one session in the Sessions push"
+
+      for session <- sessions,
           key <- Hivefin.Jellyfin.Dto.Session.required_keys() do
         assert Map.has_key?(session, key), "SessionInfoDto missing #{key}"
         refute is_nil(session[key]), "SessionInfoDto #{key} is null"
@@ -1131,6 +1138,34 @@ from `use ExUnit.Case, async: true` to:
 
 ```elixir
   use Hivefin.DataCase, async: false
+```
+
+Add a helper that persists a real user and token, so `list_access_tokens/1`
+actually returns a row. Tests that assert on pushed session payloads must use
+this rather than `state/0`:
+
+```elixir
+  defp persisted_state do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Hivefin.Accounts.create_user(%{
+        name: "Sock",
+        username: "sockuser#{n}",
+        password: "password1",
+        admin: true
+      })
+
+    {:ok, _token, at} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "dev-#{n}",
+        device_name: "Dev",
+        client: "Jellyfin Web",
+        client_version: "10.9.0"
+      })
+
+    %{user_id: user.id, session_id: at.id, device_id: "dev-#{n}", subscriptions: MapSet.new()}
+  end
 ```
 
 - [ ] **Step 2: Run test to verify it fails**

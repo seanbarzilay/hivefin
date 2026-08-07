@@ -14,6 +14,33 @@ defmodule HivefinWeb.JellyfinSocketTest do
 
   defp frame(map), do: {Jason.encode!(map), [opcode: :text]}
 
+  defp persisted_state do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Hivefin.Accounts.create_user(%{
+        name: "Sock",
+        username: "sockuser#{n}",
+        password: "password1",
+        admin: true
+      })
+
+    {:ok, _token, at} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "dev-#{n}",
+        device_name: "Dev",
+        client: "Jellyfin Web",
+        client_version: "10.9.0"
+      })
+
+    %{
+      user_id: user.id,
+      session_id: at.id,
+      device_id: "dev-#{n}",
+      subscriptions: MapSet.new()
+    }
+  end
+
   test "init pushes ForceKeepAlive so the client starts its keepalive timer" do
     assert {:push, {:text, json}, _state} = JellyfinSocket.init(state())
 
@@ -86,7 +113,7 @@ defmodule HivefinWeb.JellyfinSocketTest do
     end
 
     test "SessionsStart pushes a Sessions message and records the subscription" do
-      s = state()
+      s = persisted_state()
       {:push, _, s} = JellyfinSocket.init(s)
 
       assert {:push, {:text, json}, new_state} =
@@ -98,6 +125,7 @@ defmodule HivefinWeb.JellyfinSocketTest do
       decoded = Jason.decode!(json)
       assert decoded["MessageType"] == "Sessions"
       assert is_list(decoded["Data"])
+      assert decoded["Data"] != []
       assert MapSet.member?(new_state.subscriptions, "Sessions")
     end
 
@@ -139,14 +167,17 @@ defmodule HivefinWeb.JellyfinSocketTest do
     end
 
     test "every session in a Sessions push carries the required fields" do
-      s = state()
+      s = persisted_state()
       {:push, _, s} = JellyfinSocket.init(s)
 
       {:push, {:text, json}, _} =
         JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
 
-      for session <- Jason.decode!(json)["Data"],
-          key <- Hivefin.Jellyfin.Dto.Session.required_keys() do
+      sessions = Jason.decode!(json)["Data"]
+      # Without this the for-loop below can pass vacuously on an empty list.
+      assert sessions != [], "expected at least one session in the Sessions push"
+
+      for session <- sessions, key <- Hivefin.Jellyfin.Dto.Session.required_keys() do
         assert Map.has_key?(session, key), "SessionInfoDto missing #{key}"
         refute is_nil(session[key]), "SessionInfoDto #{key} is null"
       end
