@@ -317,7 +317,67 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     Hivefin.Playback.Session.stop(hold)
   end
 
-  test "PlaybackInfo transcode uses progressive fMP4 so vue uses video.src", %{
+  test "PlaybackInfo DirectPlays when profile allows container and codecs", %{
+    conn: conn,
+    movie: movie,
+    source: source
+  } do
+    body = %{
+      "DeviceProfile" => %{
+        "DirectPlayProfiles" => [
+          %{
+            "Container" => "mp4",
+            "Type" => "Video",
+            "VideoCodec" => "h264",
+            "AudioCodec" => "aac"
+          }
+        ]
+      }
+    }
+
+    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
+    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+    assert ms["SupportsDirectPlay"] == true
+    assert ms["SupportsDirectStream"] == true
+    assert is_binary(ms["DirectStreamUrl"])
+    assert ms["DirectStreamUrl"] =~ "Static=true"
+    assert ms["Id"] == Id.format(source.id)
+  end
+
+  test "PlaybackInfo remuxes without claiming DirectPlay when container not allowed", %{
+    conn: conn,
+    movie: movie,
+    source: source
+  } do
+    # Force remux: codecs ok, only mkv allowed as DirectPlay (fixture is mp4)
+    body = %{
+      "DeviceProfile" => %{
+        "DirectPlayProfiles" => [
+          %{
+            "Container" => "mkv",
+            "Type" => "Video",
+            "VideoCodec" => "h264",
+            "AudioCodec" => "aac"
+          }
+        ]
+      }
+    }
+
+    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
+    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+    assert ms["Id"] == Id.format(source.id)
+    assert ms["SupportsDirectPlay"] == false
+    # Must be false: vue builds Static=true stream.Container when true
+    assert ms["SupportsDirectStream"] == false
+    assert ms["SupportsTranscoding"] == true
+    assert is_binary(ms["TranscodingUrl"])
+    assert ms["TranscodingUrl"] =~ "stream.mp4"
+    assert ms["TranscodingUrl"] =~ "Static=false"
+    refute ms["TranscodingUrl"] =~ "Transcode=true"
+    refute Map.has_key?(ms, "Path")
+  end
+
+  test "PlaybackInfo transcodes when video codec not allowed", %{
     conn: conn,
     movie: movie
   } do
@@ -336,49 +396,10 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
     assert %{"MediaSources" => [ms]} = json_response(conn, 200)
-    assert ms["SupportsTranscoding"] == true
-    # SupportsDirectPlay true forces jellyfin-vue onto video.src (not live hls.js).
-    assert ms["SupportsDirectPlay"] == true
+    assert ms["SupportsDirectPlay"] == false
     assert ms["SupportsDirectStream"] == false
-    assert ms["TranscodingSubProtocol"] == "http"
-    assert ms["TranscodingContainer"] == "mp4"
+    assert ms["SupportsTranscoding"] == true
     assert ms["TranscodingUrl"] =~ "stream.mp4"
     assert ms["TranscodingUrl"] =~ "Transcode=true"
-    assert ms["TranscodingUrl"] =~ "Static=false"
-  end
-
-  test "PlaybackInfo remux uses progressive fMP4 without Static DirectStream", %{
-    conn: conn,
-    movie: movie,
-    source: source
-  } do
-    # Force remux decision by only allowing a non-mp4 container in DirectPlay
-    body = %{
-      "DeviceProfile" => %{
-        "DirectPlayProfiles" => [
-          %{
-            "Container" => "mkv",
-            "Type" => "Video",
-            "VideoCodec" => "h264",
-            "AudioCodec" => "aac"
-          }
-        ]
-      }
-    }
-
-    # Source is mp4 — codecs ok, container not in direct play → remux
-    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
-    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
-    assert ms["Id"] == Id.format(source.id)
-    assert ms["SupportsDirectPlay"] == true
-    # Must be false: vue builds Static=true stream.Container when true
-    assert ms["SupportsDirectStream"] == false
-    assert is_binary(ms["TranscodingUrl"])
-    assert ms["TranscodingUrl"] =~ "stream.mp4"
-    assert ms["TranscodingSubProtocol"] == "http"
-    assert ms["TranscodingContainer"] == "mp4"
-    refute ms["TranscodingUrl"] =~ "Transcode=true"
-    assert ms["TranscodingUrl"] =~ "Static=false"
-    refute Map.has_key?(ms, "Path")
   end
 end

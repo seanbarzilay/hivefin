@@ -91,15 +91,15 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   end
 
   defp put_play_method(base, :direct_play, _item_id, source_id, token, _session, _meta) do
-    # Path uses media source id (jellyfin-vue convention)
+    # Original file (incl. MKV). jellyfin-vue builds
+    # /Videos/{mediaSourceId}/stream.{Container}?Static=true when
+    # SupportsDirectStream is true.
     url = direct_stream_url(source_id, source_id, token, static: true)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => true,
-      # jellyfin-vue builds Static=true stream.{Container} when SupportsDirectStream
-      # is true — only safe when DirectPlay is also true.
       "SupportsDirectStream" => true,
-      "SupportsTranscoding" => false,
+      "SupportsTranscoding" => true,
       "DirectStreamUrl" => url,
       "TranscodingUrl" => nil,
       "TranscodingSubProtocol" => nil,
@@ -108,34 +108,43 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     })
   end
 
-  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, _meta) do
-    # Progressive fMP4 remux. jellyfin-vue uses hls.js whenever SupportsDirectPlay
-    # is false (and treats live HLS as start-at-live-edge), so we advertise
-    # DirectPlay + http progressive URL and force video.src continuous playback.
-    url = progressive_url(item_id, source_id, token, session, transcode: false)
+  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, meta) do
+    # Remux only when DirectPlay is not allowed by the device profile.
+    # SupportsDirectStream must stay false for jellyfin-vue: it treats that
+    # flag as Static=true original file, not server remux.
+    container = Map.get(meta, :remux_container, "ts")
+
+    {url, sub, cont} =
+      case container do
+        "mp4" ->
+          {progressive_url(item_id, source_id, token, session, transcode: false), "http", "mp4"}
+
+        _ ->
+          # HEVC/AC3/DTS etc. — stream-copy into HLS/MPEG-TS (fMP4 copy is unreliable).
+          {hls_url(item_id, source_id, token, session, transcode: false), "hls", "ts"}
+      end
 
     Map.merge(base, %{
-      "SupportsDirectPlay" => true,
-      # Must stay false: vue builds Static=true stream.{Container} when true.
+      "SupportsDirectPlay" => false,
       "SupportsDirectStream" => false,
       "SupportsTranscoding" => true,
-      "DirectStreamUrl" => url,
+      "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
-      "TranscodingSubProtocol" => "http",
-      "TranscodingContainer" => "mp4",
+      "TranscodingSubProtocol" => sub,
+      "TranscodingContainer" => cont,
       "IsRemote" => false
     })
   end
 
   defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
-    # Progressive fMP4 H.264/AAC — continuous pipe, no live-edge HLS jumps.
+    # Re-encode only when codecs are not DirectPlay-compatible.
     url = progressive_url(item_id, source_id, token, session, transcode: true)
 
     Map.merge(base, %{
-      "SupportsDirectPlay" => true,
+      "SupportsDirectPlay" => false,
       "SupportsDirectStream" => false,
       "SupportsTranscoding" => true,
-      "DirectStreamUrl" => url,
+      "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
       "TranscodingSubProtocol" => "http",
       "TranscodingContainer" => "mp4",
@@ -157,6 +166,14 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     transcode = if Keyword.get(opts, :transcode, false), do: "&Transcode=true", else: ""
 
     "/Videos/#{item_id}/stream.mp4?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
+  end
+
+  defp hls_url(item_id, source_id, token, session, opts) do
+    item_id = Id.format(item_id)
+    source_id = Id.format(source_id)
+    transcode = if Keyword.get(opts, :transcode, false), do: "&Transcode=true", else: ""
+
+    "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
   end
 
 

@@ -11,12 +11,24 @@ defmodule Hivefin.Playback.DecisionTest do
     assert meta.reason == :compatible
   end
 
-  test "mkv h264 remuxes when mkv not direct-playable" do
+  test "mkv h264 aac remuxes to fMP4 when mkv not direct-playable" do
     source = %{container: "mkv", video_codec: "h264", audio_codec: "aac"}
     profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
     assert {:direct_stream, meta} = Decision.choose(source, profile)
     assert meta.reason == :container_not_allowed
     assert meta.remux_container == "mp4"
+  end
+
+  test "mkv hevc remuxes to ts when mkv not direct-playable" do
+    source = %{container: "mkv", video_codec: "hevc", audio_codec: "ac3"}
+    profile = %{direct_play_containers: ["mp4"], video_codecs: ["hevc"], audio_codecs: ["ac3"]}
+    assert {:direct_stream, meta} = Decision.choose(source, profile)
+    assert meta.remux_container == "ts"
+  end
+
+  test "default profile DirectPlays mkv hevc ac3" do
+    source = %{container: "mkv", video_codec: "hevc", audio_codec: "ac3"}
+    assert {:direct_play, _} = Decision.choose(source, DeviceProfile.default())
   end
 
   test "unsupported video codec forces transcode" do

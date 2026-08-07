@@ -3,10 +3,10 @@ defmodule Hivefin.Playback.Decision do
   Chooses DirectPlay / DirectStream (remux) / Transcode for a media source
   against a normalized `DeviceProfile`.
 
-  ## v1 heuristics
+  ## Heuristics (DirectPlay first)
 
   1. If container is allowed **and** primary video/audio codecs are allowed →
-     `:direct_play`
+     `:direct_play` (serve original file, including MKV)
   2. Else if codecs are allowed but container is not → `:direct_stream` (remux)
   3. Else → `:transcode`
 
@@ -56,10 +56,14 @@ defmodule Hivefin.Playback.Decision do
          }}
 
       codecs_ok? ->
+        # Prefer stream-copy remux. Use MPEG-TS/HLS for non-fMP4-safe bitstreams
+        # (HEVC/AC3/DTS copy into fragmented MP4 often fails).
+        remux_container = if fmp4_copy_safe?(video, audio), do: "mp4", else: "ts"
+
         {:direct_stream,
          %{
            reason: :container_not_allowed,
-           remux_container: "mp4",
+           remux_container: remux_container,
            implemented: true,
            container: container,
            video_codec: video,
@@ -191,6 +195,11 @@ defmodule Hivefin.Playback.Decision do
   defp codec_allowed?(codec, allowed) do
     codec = String.downcase(codec)
     Enum.any?(allowed, fn a -> a == codec end)
+  end
+
+  # Stream-copy into fragmented MP4 is only reliable for common browser codecs.
+  defp fmp4_copy_safe?(video, audio) do
+    video in [nil, "h264", "avc1", "avc"] and audio in [nil, "aac", "mp3", "opus"]
   end
 
   defp downcase_or_nil(nil), do: nil

@@ -11,6 +11,7 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
                "-hide_banner",
                "-loglevel",
                "error",
+               "-nostdin",
                "-i",
                "/media/in.mkv",
                "-map",

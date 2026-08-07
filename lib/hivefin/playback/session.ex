@@ -580,6 +580,8 @@ defmodule Hivefin.Playback.Session do
   defp fallback_restart(state) do
     if state.port, do: Runner.close(state.port)
 
+    # Drop any partial ftyp/moov from the failed HW attempt so clients never
+    # see a corrupt progressive MP4 header mixed with the CPU encode.
     state = %{
       state
       | encoder: :libx264,

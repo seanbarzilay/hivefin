@@ -49,6 +49,8 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-hide_banner",
       "-loglevel",
       "error",
+      # Port has no TTY; avoid stdin control interference.
+      "-nostdin",
       "-i",
       input,
       "-map",
@@ -57,7 +59,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "0:a:0?",
       "-c",
       "copy",
-      # Drop data/attachment streams that break MPEG-TS remux.
+      # Drop data/attachment/subtitle streams that break TS/fMP4 remux.
       "-dn",
       "-sn"
     ] ++ container_args(format, output, opts)
@@ -89,6 +91,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-hide_banner",
       "-loglevel",
       "error",
+      "-nostdin",
       "-i",
       input,
       "-map",

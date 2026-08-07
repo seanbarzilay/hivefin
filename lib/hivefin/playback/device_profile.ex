@@ -15,13 +15,16 @@ defmodule Hivefin.Playback.DeviceProfile do
 
   @doc """
   Permissive default used when the client omits a DeviceProfile.
-  Covers the fixture mp4 (h264/aac) and common progressive containers.
+
+  DirectPlay is preferred (including `mkv`, which is most of a typical
+  library). Remux/transcode only kick in when a real client DeviceProfile
+  rejects the container or codecs.
   """
   def default do
     %{
-      direct_play_containers: ~w(mp4 m4v mov webm),
-      video_codecs: ~w(h264 hevc av1 vp8 vp9 mpeg4),
-      audio_codecs: ~w(aac mp3 opus vorbis ac3 eac3 flac)
+      direct_play_containers: ~w(mp4 m4v mov webm mkv ts m2ts avi wmv),
+      video_codecs: ~w(h264 hevc av1 vp8 vp9 mpeg2video mpeg4 vc1),
+      audio_codecs: ~w(aac mp3 opus vorbis ac3 eac3 flac dts truehd pcm_s16le pcm_s24le pcm_s32le)
     }
   end
 
