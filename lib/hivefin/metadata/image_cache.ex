@@ -132,20 +132,17 @@ defmodule Hivefin.Metadata.ImageCache do
   end
 
   defp download(url) do
-    opts = [url: url, decode_body: false] ++ req_options()
-
-    case Req.get(opts) do
-      {:ok, %Req.Response{status: 200, body: body, headers: headers}}
-      when is_binary(body) and byte_size(body) > 0 ->
+    case Hivefin.Http.get_body(url,
+           decode_json: false,
+           req_options: req_options()
+         ) do
+      {:ok, %{body: body, headers: headers}} when is_binary(body) and byte_size(body) > 0 ->
         ct = header_value(headers, "content-type")
         {:ok, body, ct}
 
-      {:ok, %Req.Response{status: status}} ->
-        {:error, {:http_error, status}}
-
-      {:error, reason} ->
+      {:error, reason} = err ->
         Logger.warning("image download failed: #{inspect(reason)}")
-        {:error, reason}
+        err
     end
   end
 
@@ -154,7 +151,7 @@ defmodule Hivefin.Metadata.ImageCache do
     Application.get_env(:hivefin, :metadata_req_options, [])
   end
 
-  defp header_value(headers, name) do
+  defp header_value(headers, name) when is_list(headers) do
     name = String.downcase(name)
 
     Enum.find_value(headers, fn
@@ -164,6 +161,8 @@ defmodule Hivefin.Metadata.ImageCache do
         end
     end)
   end
+
+  defp header_value(_, _), do: nil
 
   defp extension_for(url, content_type) do
     cond do

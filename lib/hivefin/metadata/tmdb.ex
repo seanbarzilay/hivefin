@@ -101,17 +101,20 @@ defmodule Hivefin.Metadata.TMDB do
 
   defp do_get(path, params) do
     url = base_url() <> path
-    opts = [url: url, params: params] ++ req_options()
 
-    case Req.get(opts) do
-      {:ok, %Req.Response{status: 200, body: body}} when is_map(body) ->
+    case Hivefin.Http.get_body(url,
+           params: params,
+           decode_json: true,
+           req_options: req_options()
+         ) do
+      {:ok, %{body: body}} when is_map(body) ->
         {:ok, body}
 
-      {:ok, %Req.Response{status: status}} when status in 400..499 ->
+      {:error, {:http_error, status}} when status in 400..499 ->
         Logger.warning("TMDB client error status=#{status} path=#{path}")
         {:error, {:http_error, status}}
 
-      {:ok, %Req.Response{status: status}} ->
+      {:error, {:http_error, status}} ->
         Logger.warning("TMDB server error status=#{status} path=#{path}")
         {:error, {:http_error, status}}
 

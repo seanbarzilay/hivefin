@@ -19,6 +19,8 @@ defmodule Hivefin.Metadata.Worker do
   """
   @spec refresh_item(Ecto.UUID.t()) :: :ok
   def refresh_item(item_id) when is_binary(item_id) do
+    allow_repo_sandbox()
+
     case LibraryContext.get_item(item_id) do
       %Item{type: :movie} = item ->
         do_refresh_movie(item)
@@ -48,19 +50,15 @@ defmodule Hivefin.Metadata.Worker do
   def refresh_item(_), do: :ok
 
   @doc """
-  Enqueues an async refresh under the metadata task supervisor.
+  Enqueues an async refresh on the bounded metadata queue.
 
-  Best-effort: returns `:ok` even if the task cannot be started.
+  Best-effort: returns `:ok` even if the queue is unavailable.
   Disabled when `config :hivefin, :metadata_enqueue, false` (tests).
   """
   @spec enqueue_refresh(Ecto.UUID.t()) :: :ok
   def enqueue_refresh(item_id) when is_binary(item_id) do
     if Application.get_env(:hivefin, :metadata_enqueue, true) do
-      _ =
-        Task.Supervisor.start_child(Hivefin.Metadata.TaskSupervisor, fn ->
-          allow_repo_sandbox()
-          refresh_item(item_id)
-        end)
+      Hivefin.Metadata.Queue.enqueue(item_id)
     end
 
     :ok

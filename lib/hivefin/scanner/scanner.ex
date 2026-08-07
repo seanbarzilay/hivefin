@@ -542,7 +542,7 @@ defmodule Hivefin.Scanner do
           status: status,
           items_found: found,
           items_added: added,
-          error: error,
+          error: truncate_error(error),
           finished_at: now()
         })
 
@@ -550,6 +550,14 @@ defmodule Hivefin.Scanner do
         :ok
     end
   end
+
+  defp truncate_error(nil), do: nil
+
+  defp truncate_error(error) when is_binary(error) do
+    if String.length(error) > 2000, do: String.slice(error, 0, 2000) <> "…", else: error
+  end
+
+  defp truncate_error(error), do: error |> inspect() |> truncate_error()
 
   defp mark_job_cancelled_if_running(job) do
     case Repo.get(ScanJob, job.id) do

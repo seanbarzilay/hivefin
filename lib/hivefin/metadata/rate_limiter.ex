@@ -28,7 +28,9 @@ defmodule Hivefin.Metadata.RateLimiter do
 
       _pid ->
         try do
-          GenServer.call(server, :checkout, 30_000)
+          # Long timeout: scan used to stampede; queue now limits concurrency but
+          # workers still wait their turn for tokens.
+          GenServer.call(server, :checkout, 120_000)
         catch
           # Fail-closed: do not allow HTTP when the limiter cannot grant a token
           :exit, _reason -> :error

@@ -32,6 +32,7 @@ defmodule Hivefin.Application do
       Hivefin.Scanner,
       {Task.Supervisor, name: Hivefin.Metadata.TaskSupervisor},
       Hivefin.Metadata.RateLimiter,
+      Hivefin.Metadata.Queue,
       {Registry, keys: :unique, name: Hivefin.Playback.Registry},
       Hivefin.Playback.Supervisor,
       # Start to serve requests, typically the last entry
