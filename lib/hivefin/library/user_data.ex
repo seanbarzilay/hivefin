@@ -110,7 +110,14 @@ defmodule Hivefin.Library.UserData do
 
     if cs.valid? do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-      changes = Map.take(cs.changes, @allowed_attr_keys ++ [:user_id, :item_id])
+
+      # Ecto omits fields equal to schema defaults from `changes` (e.g. ticks=0,
+      # played=false). Callers still need those explicit values applied on
+      # conflict — otherwise "mark watched" cannot clear a resume position.
+      changes =
+        cs.changes
+        |> Map.take(@allowed_attr_keys)
+        |> Map.merge(Map.take(attrs, @allowed_attr_keys))
 
       row =
         %{
@@ -126,12 +133,11 @@ defmodule Hivefin.Library.UserData do
           inserted_at: now,
           updated_at: now
         }
-        |> Map.merge(Map.drop(changes, [:user_id, :item_id]))
+        |> Map.merge(changes)
         |> Map.put(:updated_at, now)
 
       replace_fields =
         changes
-        |> Map.drop([:user_id, :item_id])
         |> Map.keys()
         |> Kernel.++([:updated_at])
         |> Enum.uniq()

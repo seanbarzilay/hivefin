@@ -164,21 +164,138 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
 
 
   defp from_media_stream(%MediaStream{} = stream) do
+    channel_layout = channel_layout(stream.channels)
+
     %{
       "Index" => stream.index,
       "Type" => stream_type_name(stream.type),
       "Codec" => stream.codec,
       "Language" => stream.language,
       "Channels" => stream.channels,
+      "ChannelLayout" => channel_layout,
       "Width" => stream.width,
       "Height" => stream.height,
       "BitRate" => stream.bit_rate,
-      "IsDefault" => stream.is_default,
-      "IsForced" => stream.is_forced,
-      "Title" => stream.title
+      "IsDefault" => stream.is_default || false,
+      "IsForced" => stream.is_forced || false,
+      "Title" => stream.title,
+      # jellyfin-vue MediaStreamSelector labels only use DisplayTitle
+      "DisplayTitle" => display_title(stream, channel_layout)
     }
     |> drop_nils()
   end
+
+  # Labels for client track pickers (matches Jellyfin-ish DisplayTitle shape).
+  defp display_title(%MediaStream{type: :video} = stream, _layout) do
+    res =
+      cond do
+        is_integer(stream.height) and stream.height > 0 -> "#{stream.height}p"
+        is_integer(stream.width) and is_integer(stream.height) ->
+          "#{stream.width}x#{stream.height}"
+
+        true ->
+          nil
+      end
+
+    codec = codec_label(stream.codec)
+    join_title_parts([res, codec, default_suffix(stream)])
+  end
+
+  defp display_title(%MediaStream{type: :audio} = stream, layout) do
+    join_title_parts([
+      language_label(stream.language),
+      codec_label(stream.codec),
+      audio_layout_label(stream.channels, layout),
+      default_suffix(stream)
+    ])
+  end
+
+  defp display_title(%MediaStream{type: :subtitle} = stream, _layout) do
+    join_title_parts([
+      language_label(stream.language),
+      codec_label(stream.codec),
+      forced_suffix(stream),
+      default_suffix(stream)
+    ])
+  end
+
+  defp display_title(%MediaStream{} = stream, _layout) do
+    join_title_parts([codec_label(stream.codec), stream.title])
+  end
+
+  defp join_title_parts(parts) do
+    parts
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join(" ")
+    |> case do
+      "" -> "Unknown"
+      title -> title
+    end
+  end
+
+  defp codec_label(nil), do: nil
+  defp codec_label(""), do: nil
+
+  defp codec_label(codec) when is_binary(codec) do
+    codec
+    |> String.trim()
+    |> String.upcase()
+  end
+
+  defp codec_label(_), do: nil
+
+  defp language_label(nil), do: nil
+  defp language_label(""), do: nil
+  defp language_label(lang) when lang in ["und", "unk", "unknown"], do: nil
+
+  defp language_label(lang) when is_binary(lang) do
+    case String.downcase(lang) do
+      "en" -> "English"
+      "eng" -> "English"
+      "es" -> "Spanish"
+      "spa" -> "Spanish"
+      "fr" -> "French"
+      "fre" -> "French"
+      "fra" -> "French"
+      "de" -> "German"
+      "ger" -> "German"
+      "deu" -> "German"
+      "ja" -> "Japanese"
+      "jpn" -> "Japanese"
+      "zh" -> "Chinese"
+      "chi" -> "Chinese"
+      "zho" -> "Chinese"
+      "ko" -> "Korean"
+      "kor" -> "Korean"
+      "pt" -> "Portuguese"
+      "por" -> "Portuguese"
+      "it" -> "Italian"
+      "ita" -> "Italian"
+      "ru" -> "Russian"
+      "rus" -> "Russian"
+      other -> String.upcase(other)
+    end
+  end
+
+  defp language_label(_), do: nil
+
+  defp channel_layout(1), do: "1.0"
+  defp channel_layout(2), do: "2.0"
+  defp channel_layout(6), do: "5.1"
+  defp channel_layout(8), do: "7.1"
+  defp channel_layout(n) when is_integer(n) and n > 0, do: to_string(n)
+  defp channel_layout(_), do: nil
+
+  defp audio_layout_label(2, "2.0"), do: "Stereo"
+  defp audio_layout_label(_channels, layout) when is_binary(layout), do: layout
+  defp audio_layout_label(n, _) when is_integer(n) and n > 0, do: "#{n} ch"
+  defp audio_layout_label(_, _), do: nil
+
+  defp default_suffix(%MediaStream{is_default: true}), do: "- Default"
+  defp default_suffix(_), do: nil
+
+  defp forced_suffix(%MediaStream{is_forced: true}), do: "Forced"
+  defp forced_suffix(_), do: nil
 
   defp type_name(:movie), do: "Movie"
   defp type_name(:series), do: "Series"

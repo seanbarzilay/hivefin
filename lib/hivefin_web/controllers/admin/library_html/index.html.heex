@@ -1,0 +1,148 @@
+<Layouts.admin flash={@flash} current_user={@current_user} active={@active}>
+  <.page_header title="Libraries">
+    Media roots scanned into the catalog
+    <:actions>
+      <.form for={%{}} action={~p"/admin/libraries/scan-all"} method="post">
+        <.button type="submit" variant="secondary">Rescan all</.button>
+      </.form>
+    </:actions>
+  </.page_header>
+
+  <div class="grid gap-6 lg:grid-cols-5">
+    <div class="lg:col-span-3">
+      <.card>
+        <div :if={@libraries == []} class="py-8 text-center text-sm text-base-content/60">
+          No libraries configured yet.
+        </div>
+
+        <div :if={@libraries != []} class="overflow-x-auto">
+          <table class="table table-sm">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Items</th>
+                <th>Scan</th>
+                <th>Path</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={lib <- @libraries}>
+                <td class="font-medium">
+                  <a href={~p"/admin/libraries/#{lib.id}/edit"} class="link link-hover">
+                    {lib.name}
+                  </a>
+                </td>
+                <td>
+                  <span class="badge badge-ghost badge-sm">{lib.type}</span>
+                </td>
+                <td>{lib.item_count}</td>
+                <td class="text-xs">
+                  <%= if MapSet.member?(@running_ids, lib.id) do %>
+                    <span class="badge badge-warning badge-sm gap-1">
+                      <span class="loading loading-spinner loading-xs"></span>
+                      running
+                    </span>
+                    <%= if job = lib.latest_scan do %>
+                      <div class="mt-0.5 text-base-content/50">
+                        {job.items_found || 0} found · {job.items_added || 0} added
+                      </div>
+                    <% end %>
+                  <% else %>
+                    <%= if job = lib.latest_scan do %>
+                      <span class={[
+                        "badge badge-sm",
+                        job.status == :completed && "badge-success",
+                        job.status == :failed && "badge-error",
+                        job.status == :cancelled && "badge-ghost",
+                        job.status == :running && "badge-warning"
+                      ]}>
+                        {job.status}
+                      </span>
+                      <div class="mt-0.5 text-base-content/50">
+                        {job.items_found || 0}/{job.items_added || 0}
+                        <%= if job.finished_at do %>
+                          · {Calendar.strftime(job.finished_at, "%H:%M")}
+                        <% end %>
+                      </div>
+                      <div :if={job.error} class="mt-0.5 max-w-[10rem] truncate text-error" title={job.error}>
+                        {job.error}
+                      </div>
+                    <% else %>
+                      <span class="text-base-content/40">never</span>
+                    <% end %>
+                  <% end %>
+                </td>
+                <td class="max-w-[10rem] truncate font-mono text-xs" title={lib.path}>
+                  {lib.path}
+                </td>
+                <td class="text-right">
+                  <div class="flex flex-wrap justify-end gap-1">
+                    <%= if MapSet.member?(@running_ids, lib.id) do %>
+                      <.form for={%{}} action={~p"/admin/libraries/#{lib.id}/cancel-scan"} method="post">
+                        <.button type="submit" variant="ghost">Cancel</.button>
+                      </.form>
+                    <% else %>
+                      <.form for={%{}} action={~p"/admin/libraries/#{lib.id}/scan"} method="post">
+                        <.button type="submit" variant="secondary">Scan</.button>
+                      </.form>
+                    <% end %>
+                    <a href={~p"/admin/libraries/#{lib.id}/edit"} class="btn btn-ghost btn-sm">
+                      Edit
+                    </a>
+                    <.form
+                      for={%{}}
+                      action={~p"/admin/libraries/#{lib.id}"}
+                      method="post"
+                      onsubmit="return confirm('Delete this library and all its items?')"
+                    >
+                      <input type="hidden" name="_method" value="delete" />
+                      <.button type="submit" variant="danger">Delete</.button>
+                    </.form>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p :if={@any_running?} class="mt-3 text-xs text-base-content/50">
+          Auto-refreshing while scans run…
+        </p>
+        <script :if={@any_running?}>
+          setTimeout(function () { window.location.reload(); }, 3000);
+        </script>
+      </.card>
+    </div>
+
+    <div class="lg:col-span-2">
+      <.card>
+        <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+          Add library
+        </h2>
+        <.form for={%{}} as={:library} action={~p"/admin/libraries"} method="post" class="space-y-4">
+          <.input name="library[name]" label="Name" value={@form["name"]} required={true} placeholder="Movies" />
+          <.select
+            name="library[type]"
+            label="Type"
+            value={@form["type"]}
+            options={[{"Movies", "movies"}, {"TV shows", "tv"}]}
+            required={true}
+          />
+          <.input
+            name="library[path]"
+            label="Filesystem path"
+            value={@form["path"]}
+            required={true}
+            placeholder="/media/movies"
+            autocomplete="off"
+          />
+          <p class="text-xs text-base-content/50">
+            Path must already exist on the server host. Use Scan after create.
+          </p>
+          <.button type="submit">Create library</.button>
+        </.form>
+      </.card>
+    </div>
+  </div>
+</Layouts.admin>

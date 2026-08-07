@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+# Docker entrypoint for the Hivefin mix release.
+# Migrates the database, then starts the node (or runs a custom command).
+
+cd /app
+
+case "${1:-start}" in
+  start | server)
+    echo "Running migrations..."
+    bin/hivefin eval "Hivefin.Release.migrate()"
+    echo "Starting Hivefin..."
+    exec bin/hivefin start
+    ;;
+  migrate)
+    exec bin/hivefin eval "Hivefin.Release.migrate()"
+    ;;
+  remote)
+    exec bin/hivefin remote
+    ;;
+  eval)
+    shift
+    exec bin/hivefin eval "$@"
+    ;;
+  *)
+    exec "$@"
+    ;;
+esac

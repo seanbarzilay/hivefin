@@ -38,3 +38,7 @@ hivefin-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Docker / local deploy secrets and media bind mounts
+.env
+/media/
+

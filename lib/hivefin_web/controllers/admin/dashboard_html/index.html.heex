@@ -1,0 +1,67 @@
+<Layouts.admin flash={@flash} current_user={@current_user} active={@active}>
+  <.page_header title="Dashboard">
+    Server overview and quick links
+  </.page_header>
+
+  <div class="mb-8 grid gap-4 sm:grid-cols-3">
+    <.card>
+      <p class="text-xs uppercase tracking-wide text-base-content/50">Libraries</p>
+      <p class="mt-1 text-3xl font-semibold">{length(@libraries)}</p>
+    </.card>
+    <.card>
+      <p class="text-xs uppercase tracking-wide text-base-content/50">Items</p>
+      <p class="mt-1 text-3xl font-semibold">{@item_count}</p>
+    </.card>
+    <.card>
+      <p class="text-xs uppercase tracking-wide text-base-content/50">Users</p>
+      <p class="mt-1 text-3xl font-semibold">{@user_count}</p>
+    </.card>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <.card>
+      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+        Identity
+      </h2>
+      <dl class="space-y-2 text-sm">
+        <div class="flex justify-between gap-4">
+          <dt class="text-base-content/60">Server name</dt>
+          <dd class="font-medium">{@system.server_name}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-base-content/60">Product</dt>
+          <dd class="font-medium">{@system.product}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-base-content/60">API version</dt>
+          <dd class="font-medium">{@system.version}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-base-content/60">Hivefin</dt>
+          <dd class="font-medium">{@system.hivefin_version}</dd>
+        </div>
+      </dl>
+    </.card>
+
+    <.card>
+      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+        Libraries
+      </h2>
+      <div :if={@libraries == []} class="text-sm text-base-content/60">
+        No libraries yet.
+        <a href={~p"/admin/libraries"} class="link link-primary ml-1">Add one</a>
+      </div>
+      <ul class="divide-y divide-base-300">
+        <li :for={lib <- @libraries} class="flex items-center justify-between py-2 text-sm">
+          <div>
+            <p class="font-medium">{lib.name}</p>
+            <p class="text-xs text-base-content/50">
+              {lib.type} · {lib.item_count} items
+            </p>
+          </div>
+          <a href={~p"/admin/libraries"} class="link link-hover text-xs">Manage</a>
+        </li>
+      </ul>
+    </.card>
+  </div>
+</Layouts.admin>

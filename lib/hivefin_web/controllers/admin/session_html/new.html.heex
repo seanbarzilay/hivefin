@@ -1,0 +1,29 @@
+<div class="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-12">
+  <div class="mb-8 text-center">
+    <h1 class="text-3xl font-semibold tracking-tight">
+      Hivefin <span class="text-primary">Admin</span>
+    </h1>
+    <p class="mt-2 text-sm text-base-content/60">Sign in with an administrator account</p>
+  </div>
+
+  <.card>
+    <.flash kind={:info} flash={@flash} />
+    <.flash kind={:error} flash={@flash} id="flash-error" />
+
+    <.form for={%{}} action={~p"/admin/login"} method="post" class="space-y-4">
+      <.input name="username" label="Username" required={true} autocomplete="username" />
+      <.input
+        name="password"
+        type="password"
+        label="Password"
+        required={true}
+        autocomplete="current-password"
+      />
+      <.button type="submit" class="btn-block">Sign in</.button>
+    </.form>
+  </.card>
+
+  <p class="mt-6 text-center text-xs text-base-content/40">
+    Jellyfin clients use the API on this host — this console is for operators only.
+  </p>
+</div>

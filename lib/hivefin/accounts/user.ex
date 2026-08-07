@@ -23,6 +23,26 @@ defmodule Hivefin.Accounts.User do
     |> hash_password()
   end
 
+  @doc """
+  Updates password only (admin reset / self-service).
+  """
+  def password_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:password])
+    |> validate_required([:password])
+    |> validate_length(:password, min: 8)
+    |> hash_password()
+  end
+
+  @doc """
+  Updates non-password profile fields (name, admin flag).
+  """
+  def profile_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:name, :admin])
+    |> validate_required([:name])
+  end
+
   defp hash_password(changeset) do
     case get_change(changeset, :password) do
       nil ->

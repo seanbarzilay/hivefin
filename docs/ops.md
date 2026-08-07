@@ -115,6 +115,78 @@ Set `PHX_HOST` / Endpoint URL to the public hostname so generated links match. P
 
 Restore order: secrets + config → Postgres → start app → confirm `/readyz` → optional image cache restore → media mounts → scan if DB was empty.
 
+## Docker Compose deploy
+
+Hivefin ships with a multi-stage `Dockerfile` (mix release + FFmpeg) and
+`docker-compose.yml` (app + Postgres).
+
+### One-time setup on the server
+
+```bash
+git clone <your-repo-url> hivefin && cd hivefin
+cp .env.example .env
+# Edit .env:
+#   SECRET_KEY_BASE      → openssl rand -base64 48
+#   HIVEFIN_ADMIN_PASSWORD
+#   POSTGRES_PASSWORD
+#   PHX_HOST / HIVEFIN_LOCAL_ADDRESS  → server LAN IP or hostname
+#   MEDIA_HOST_PATH                   → host directory with movies/tv trees
+```
+
+### Build and run
+
+```bash
+docker compose up -d --build
+docker compose ps
+curl -sS http://127.0.0.1:4000/readyz
+```
+
+- **Admin UI:** `http://SERVER:4000/admin` (bootstrap user from `.env`)
+- **Jellyfin clients:** add server `http://SERVER:4000`
+- **Libraries:** in admin, use container paths under the media mount, e.g. `/media/movies`
+
+Migrations run automatically on container start (`Hivefin.Release.migrate/0`).
+
+### Useful commands
+
+```bash
+docker compose logs -f hivefin
+docker compose exec hivefin bin/hivefin remote   # IEx on the release
+docker compose down                               # stop stack (keeps volumes)
+docker compose down -v                            # stop + wipe Postgres/cache volumes
+```
+
+### Volumes
+
+| Volume / mount | Purpose |
+|----------------|---------|
+| `hivefin_pgdata` | Postgres data |
+| `hivefin_image_cache` | TMDB/artwork cache |
+| `hivefin_transcode` | Ephemeral remux/transcode work |
+| `${MEDIA_HOST_PATH}:/media:ro` | Your media (read-only) |
+
+### TLS / reverse proxy
+
+Default compose uses **plain HTTP** (`HIVEFIN_FORCE_SSL=false`) for LAN simplicity.
+In front of Caddy/nginx with TLS, set:
+
+```env
+HIVEFIN_FORCE_SSL=true
+PHX_SCHEME=https
+PHX_URL_PORT=443
+PHX_HOST=media.example.com
+HIVEFIN_LOCAL_ADDRESS=https://media.example.com
+```
+
+and proxy to `127.0.0.1:4000` with `X-Forwarded-Proto` and `X-Forwarded-For`.
+
+### Updating
+
+```bash
+git pull
+docker compose up -d --build
+```
+
 ## Environment variables (summary)
 
 | Variable | Purpose |

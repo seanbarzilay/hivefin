@@ -1,0 +1,46 @@
+<Layouts.admin flash={@flash} current_user={@current_user} active={@active}>
+  <.page_header title={"Edit #{@library.name}"}>
+    Update display name or media root path
+    <:actions>
+      <a href={~p"/admin/libraries"} class="btn btn-ghost btn-sm">Back</a>
+    </:actions>
+  </.page_header>
+
+  <.card class="max-w-lg">
+    <.form
+      for={%{}}
+      as={:library}
+      action={~p"/admin/libraries/#{@library.id}"}
+      method="post"
+      class="space-y-4"
+    >
+      <input type="hidden" name="_method" value="put" />
+      <.input name="library[name]" label="Name" value={@library.name} required={true} />
+      <label class="form-control w-full">
+        <div class="label py-1">
+          <span class="label-text text-sm font-medium">Type</span>
+        </div>
+        <input
+          type="text"
+          class="input input-bordered w-full bg-base-100 opacity-70"
+          value={@library.type}
+          disabled
+        />
+        <div class="label py-1">
+          <span class="label-text-alt text-base-content/50">Type cannot be changed after create</span>
+        </div>
+      </label>
+      <.input
+        name="library[path]"
+        label="Filesystem path"
+        value={@library.path}
+        required={true}
+        autocomplete="off"
+      />
+      <p class="text-xs text-base-content/50">
+        New path must exist as a directory on this host. Re-scan after moving media.
+      </p>
+      <.button type="submit">Save changes</.button>
+    </.form>
+  </.card>
+</Layouts.admin>

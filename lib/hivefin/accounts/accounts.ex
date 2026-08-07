@@ -18,6 +18,43 @@ defmodule Hivefin.Accounts do
 
   def count_users, do: Repo.aggregate(User, :count)
 
+  def list_users do
+    User
+    |> order_by([u], asc: u.username)
+    |> Repo.all()
+  end
+
+  def count_admins do
+    from(u in User, where: u.admin == true)
+    |> Repo.aggregate(:count)
+  end
+
+  @doc """
+  Sets a new password for an existing user.
+  """
+  def set_password(%User{} = user, password) when is_binary(password) do
+    user
+    |> User.password_changeset(%{password: password})
+    |> Repo.update()
+  end
+
+  def update_user_profile(%User{} = user, attrs) do
+    user
+    |> User.profile_changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Deletes a user. Refuses if this is the last administrator.
+  """
+  def delete_user(%User{} = user) do
+    if user.admin and count_admins() <= 1 do
+      {:error, :last_admin}
+    else
+      Repo.delete(user)
+    end
+  end
+
   def authenticate(username, password) do
     user = Repo.get_by(User, username: username)
 

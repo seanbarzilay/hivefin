@@ -75,6 +75,8 @@ defmodule HivefinWeb.Jellyfin.SessionsPlayingTest do
   } do
     start_ticks = UserData.seconds_to_ticks(5)
     stop_ticks = UserData.seconds_to_ticks(300)
+    # Runtime 20 min so 300s is mid-play (not auto-complete)
+    insert_source!(movie.id, UserData.seconds_to_ticks(1200))
 
     conn1 =
       post(conn, ~p"/Sessions/Playing", %{
@@ -94,6 +96,67 @@ defmodule HivefinWeb.Jellyfin.SessionsPlayingTest do
 
     ud = UserData.get(user.id, movie.id)
     assert ud.playback_position_ticks == stop_ticks
+    assert ud.played == false
+    assert ud.played_percentage == 25.0
+  end
+
+  test "POST /Sessions/Playing/Stopped near end marks played and clears resume", %{
+    conn: conn,
+    user: user,
+    movie: movie
+  } do
+    runtime = UserData.seconds_to_ticks(100)
+    insert_source!(movie.id, runtime)
+    # 95% of runtime — past Jellyfin-style 90% threshold
+    stop_ticks = trunc(runtime * 0.95)
+
+    conn =
+      post(conn, ~p"/Sessions/Playing/Stopped", %{
+        "ItemId" => movie.id,
+        "PositionTicks" => stop_ticks
+      })
+
+    assert response(conn, 204)
+
+    ud = UserData.get(user.id, movie.id)
+    assert ud.played == true
+    assert ud.playback_position_ticks == 0
+    assert ud.played_percentage == 100.0
+    assert ud.play_count == 1
+  end
+
+  test "POST Progress at exact runtime marks complete", %{
+    conn: conn,
+    user: user,
+    movie: movie
+  } do
+    runtime = 60_416_670
+    insert_source!(movie.id, runtime)
+
+    conn =
+      post(conn, ~p"/Sessions/Playing/Progress", %{
+        "ItemId" => movie.id,
+        "PositionTicks" => runtime,
+        "IsPaused" => false
+      })
+
+    assert response(conn, 204)
+
+    ud = UserData.get(user.id, movie.id)
+    assert ud.played == true
+    assert ud.playback_position_ticks == 0
+  end
+
+  defp insert_source!(item_id, duration_ticks) do
+    {:ok, _} =
+      %Hivefin.Library.MediaSource{}
+      |> Hivefin.Library.MediaSource.changeset(%{
+        path: Path.join(System.tmp_dir!(), "hivefin-progress-#{item_id}.mp4"),
+        container: "mp4",
+        duration_ticks: duration_ticks,
+        item_id: item_id
+      })
+      |> Hivefin.Repo.insert()
   end
 
   test "GET item embeds UserData PlaybackPositionTicks after progress", %{
@@ -142,7 +205,7 @@ defmodule HivefinWeb.Jellyfin.SessionsPlayingTest do
       })
 
     assert %{"Items" => [item]} = json_response(conn, 200)
-    assert item["Id"] == movie.id
+    assert item["Id"] == Hivefin.Jellyfin.Id.format(movie.id)
     assert item["UserData"]["PlaybackPositionTicks"] == ticks
     assert item["UserData"]["Played"] == true
     assert item["UserData"]["PlayedPercentage"] == 100.0

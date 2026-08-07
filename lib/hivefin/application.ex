@@ -44,6 +44,7 @@ defmodule Hivefin.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
+        maybe_apply_settings()
         maybe_bootstrap_admin()
         {:ok, pid}
 
@@ -74,6 +75,16 @@ defmodule Hivefin.Application do
   def config_change(changed, _new, removed) do
     HivefinWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp maybe_apply_settings do
+    try do
+      Hivefin.Settings.apply_all!()
+    rescue
+      e -> Logger.warning("Settings load failed: #{Exception.message(e)}")
+    catch
+      :exit, reason -> Logger.warning("Settings load exited: #{inspect(reason)}")
+    end
   end
 
   defp maybe_bootstrap_admin do

@@ -1,6 +1,15 @@
 defmodule HivefinWeb.Router do
   use HivefinWeb, :router
 
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {HivefinWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -18,9 +27,44 @@ defmodule HivefinWeb.Router do
     plug HivefinWeb.Plugs.JellyfinAuth
   end
 
+  pipeline :admin_auth do
+    plug HivefinWeb.Plugs.AdminAuth
+  end
+
   scope "/", HivefinWeb do
     get "/healthz", HealthController, :show
     get "/readyz", ReadyController, :show
+  end
+
+  # Minimal operator console (session cookie; admin users only)
+  scope "/admin", HivefinWeb.Admin do
+    pipe_through :browser
+
+    get "/login", SessionController, :new
+    post "/login", SessionController, :create
+    delete "/logout", SessionController, :delete
+
+    pipe_through :admin_auth
+
+    get "/", DashboardController, :index
+
+    get "/libraries", LibraryController, :index
+    post "/libraries", LibraryController, :create
+    post "/libraries/scan-all", LibraryController, :scan_all
+    get "/libraries/:id/edit", LibraryController, :edit
+    put "/libraries/:id", LibraryController, :update
+    post "/libraries/:id/scan", LibraryController, :scan
+    post "/libraries/:id/cancel-scan", LibraryController, :cancel_scan
+    delete "/libraries/:id", LibraryController, :delete
+
+    get "/users", UserController, :index
+    post "/users", UserController, :create
+    post "/users/:id/password", UserController, :reset_password
+    delete "/users/:id", UserController, :delete
+
+    get "/settings", SettingsController, :index
+    post "/settings", SettingsController, :update
+    delete "/settings/tmdb-key", SettingsController, :clear_tmdb_key
   end
 
   # Stream routes — token via query param; not limited to application/json Accept.

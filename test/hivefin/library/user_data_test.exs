@@ -86,6 +86,25 @@ defmodule Hivefin.Library.UserDataTest do
     assert map[movie.id].playback_position_ticks == 50
   end
 
+  test "upsert can clear resume position to zero (schema default)", %{user: user, movie: movie} do
+    assert {:ok, _} =
+             UserData.upsert(user.id, movie.id, %{
+               playback_position_ticks: 60_000_000,
+               played: false
+             })
+
+    assert {:ok, ud} =
+             UserData.upsert(user.id, movie.id, %{
+               playback_position_ticks: 0,
+               played: true,
+               played_percentage: 100.0
+             })
+
+    assert ud.playback_position_ticks == 0
+    assert ud.played == true
+    assert UserData.get(user.id, movie.id).playback_position_ticks == 0
+  end
+
   test "partial upsert does not reset unmentioned fields", %{user: user, movie: movie} do
     assert {:ok, _} =
              UserData.upsert(user.id, movie.id, %{

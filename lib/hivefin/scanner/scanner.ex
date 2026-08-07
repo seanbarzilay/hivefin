@@ -44,9 +44,46 @@ defmodule Hivefin.Scanner do
   end
 
   @doc """
+  Starts scans for every library that is not already scanning.
+
+  Returns `%{started: [id], skipped: [{id, reason}], errors: [{id, reason}]}`.
+  """
+  def scan_all(server \\ __MODULE__) do
+    libraries = LibraryContext.list_libraries()
+
+    Enum.reduce(libraries, %{started: [], skipped: [], errors: []}, fn lib, acc ->
+      case scan_library(lib.id, server) do
+        :ok ->
+          %{acc | started: [lib.id | acc.started]}
+
+        {:error, :already_scanning} ->
+          %{acc | skipped: [{lib.id, :already_scanning} | acc.skipped]}
+
+        {:error, reason} ->
+          %{acc | errors: [{lib.id, reason} | acc.errors]}
+      end
+    end)
+    |> then(fn acc ->
+      %{
+        started: Enum.reverse(acc.started),
+        skipped: Enum.reverse(acc.skipped),
+        errors: Enum.reverse(acc.errors)
+      }
+    end)
+  end
+
+  @doc """
+  Library ids currently being scanned by this scanner process.
+  """
+  def running_ids(server \\ __MODULE__) do
+    GenServer.call(server, :running_ids)
+  end
+
+  @doc """
   Cancels a running scan for `library_id`. Always returns `:ok`.
   """
   def cancel(library_id, server \\ __MODULE__) do
+    library_id = Hivefin.Jellyfin.Id.coerce(library_id) || library_id
     GenServer.call(server, {:cancel, library_id})
   end
 
@@ -81,7 +118,13 @@ defmodule Hivefin.Scanner do
   end
 
   @impl true
+  def handle_call(:running_ids, _from, state) do
+    {:reply, Map.keys(state.running), state}
+  end
+
   def handle_call({:scan_library, library_id}, _from, state) do
+    library_id = Hivefin.Jellyfin.Id.coerce(library_id) || library_id
+
     cond do
       Map.has_key?(state.running, library_id) ->
         {:reply, {:error, :already_scanning}, state}

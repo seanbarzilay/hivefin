@@ -57,6 +57,20 @@ curl -s http://127.0.0.1:4000/readyz
 
 Full matrix, backups, reverse proxy TLS, and graceful shutdown: **[docs/ops.md](docs/ops.md)**.
 
+## Docker deploy (app + Postgres)
+
+```bash
+cp .env.example .env
+# set SECRET_KEY_BASE, HIVEFIN_ADMIN_PASSWORD, POSTGRES_PASSWORD,
+# PHX_HOST, HIVEFIN_LOCAL_ADDRESS, MEDIA_HOST_PATH
+
+docker compose up -d --build
+curl -sS http://127.0.0.1:4000/readyz
+# Admin: http://HOST:4000/admin
+```
+
+Details: [docs/ops.md](docs/ops.md#docker-compose-deploy).
+
 ## Development
 
 ```bash
@@ -66,4 +80,4 @@ mix precommit   # compile --warnings-as-errors, format, test
 
 ## Project status
 
-v1: Phoenix + Bandit + Ecto/Postgres, Jellyfin-compatible API surface for Web/Android TV, library scan, direct play / HW-aware FFmpeg sessions, TMDB metadata, `/healthz` + `/readyz`.
+v1: Phoenix + Bandit + Ecto/Postgres, Jellyfin-compatible API surface for Web/Android TV, library scan, direct play / HW-aware FFmpeg sessions, TMDB metadata, `/healthz` + `/readyz`, admin UI, Docker Compose stack.

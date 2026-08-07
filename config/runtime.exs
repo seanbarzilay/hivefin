@@ -81,6 +81,14 @@ if rate = System.get_env("HIVEFIN_TMDB_RATE_LIMIT") do
   end
 end
 
+if name = System.get_env("HIVEFIN_SERVER_NAME") do
+  config :hivefin, :server_name, name
+end
+
+if addr = System.get_env("HIVEFIN_LOCAL_ADDRESS") do
+  config :hivefin, :local_address, addr
+end
+
 # Parses HIVEFIN_HTTP_IP / PHX_IP for Bandit. Defaults to loopback in prod.
 # Accepts dotted IPv4 (`127.0.0.1`, `0.0.0.0`) or comma-separated IPv6 ints.
 parse_http_ip = fn
@@ -140,19 +148,42 @@ if config_env() == :prod do
       """
 
   host = System.get_env("PHX_HOST") || "example.com"
+  # Public URL used for redirects / absolute links. Behind TLS proxy use https + 443.
+  url_scheme = System.get_env("PHX_SCHEME") || "https"
+
+  url_port =
+    case System.get_env("PHX_URL_PORT") || System.get_env("URL_PORT") do
+      nil -> if url_scheme == "https", do: 443, else: 80
+      p -> String.to_integer(p)
+    end
 
   config :hivefin, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  # Default bind is loopback. Expose publicly only via reverse proxy on the
-  # same host, or set HIVEFIN_HTTP_IP / PHX_IP explicitly (e.g. 0.0.0.0).
+  # Default bind is loopback. Docker compose sets 0.0.0.0 so the published port works.
   http_ip = parse_http_ip.(System.get_env("HIVEFIN_HTTP_IP") || System.get_env("PHX_IP"))
 
-  config :hivefin, HivefinWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
-    http: [
-      ip: http_ip
-    ],
+  # force_ssl: on by default in prod. Set HIVEFIN_FORCE_SSL=false for plain HTTP
+  # (LAN Docker, or TLS terminated outside and you don't rewrite X-Forwarded-Proto).
+  force_ssl? =
+    System.get_env("HIVEFIN_FORCE_SSL", "true") not in ["false", "0", "no", "FALSE", "No"]
+
+  endpoint_config = [
+    url: [host: host, port: url_port, scheme: url_scheme],
+    http: [ip: http_ip],
     secret_key_base: secret_key_base
+  ]
+
+  endpoint_config =
+    if force_ssl? do
+      Keyword.put(endpoint_config, :force_ssl,
+        rewrite_on: [:x_forwarded_proto],
+        exclude: [hosts: ["localhost", "127.0.0.1"], paths: ["/healthz", "/readyz"]]
+      )
+    else
+      endpoint_config
+    end
+
+  config :hivefin, HivefinWeb.Endpoint, endpoint_config
 
   # ## SSL Support
   #

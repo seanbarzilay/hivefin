@@ -31,7 +31,7 @@ config :hivefin, HivefinWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [json: HivefinWeb.ErrorJSON],
+    formats: [html: HivefinWeb.ErrorHTML, json: HivefinWeb.ErrorJSON],
     layout: false
   ],
   pubsub_server: Hivefin.PubSub,

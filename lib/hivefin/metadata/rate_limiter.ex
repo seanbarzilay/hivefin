@@ -36,6 +36,16 @@ defmodule Hivefin.Metadata.RateLimiter do
     end
   end
 
+  @doc """
+  Updates the refill rate at runtime (admin settings).
+  """
+  def set_rate(rate, server \\ @name) when is_integer(rate) and rate > 0 do
+    case Process.whereis(server) do
+      nil -> :ok
+      _pid -> GenServer.cast(server, {:set_rate, rate})
+    end
+  end
+
   @impl true
   def init(opts) do
     rate =
@@ -51,6 +61,11 @@ defmodule Hivefin.Metadata.RateLimiter do
     }
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_cast({:set_rate, rate}, state) when is_integer(rate) and rate > 0 do
+    {:noreply, %{state | rate: rate, tokens: min(state.tokens, rate)}}
   end
 
   @impl true

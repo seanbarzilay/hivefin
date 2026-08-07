@@ -28,10 +28,81 @@ defmodule Hivefin.Library.LibraryContext do
     |> Repo.insert()
   end
 
+  @doc """
+  Updates library name and/or path (type is fixed after create).
+  """
+  def update_library(%Library{} = library, attrs) when is_map(attrs) do
+    data =
+      %{}
+      |> maybe_put_attr(:name, attrs[:name] || attrs["name"])
+      |> maybe_put_attr(:path, attrs[:path] || attrs["path"])
+
+    library
+    |> Library.changeset(data)
+    |> Repo.update()
+  end
+
+  defp maybe_put_attr(map, _key, nil), do: map
+  defp maybe_put_attr(map, _key, ""), do: map
+  defp maybe_put_attr(map, key, value), do: Map.put(map, key, value)
+
   def list_libraries do
     Library
     |> order_by([l], asc: l.name)
     |> Repo.all()
+  end
+
+  @doc """
+  Deletes a library and cascaded items/sources/scan jobs (DB FKs).
+  """
+  def delete_library(%Library{} = library) do
+    Repo.delete(library)
+  end
+
+  def delete_library(id) when is_binary(id) do
+    case get_library(id) do
+      nil -> {:error, :not_found}
+      library -> delete_library(library)
+    end
+  end
+
+  def count_items(library_id) do
+    library_id = Id.coerce(library_id)
+
+    from(i in Item, where: i.library_id == ^library_id)
+    |> Repo.aggregate(:count)
+  end
+
+  def count_all_items do
+    Repo.aggregate(Item, :count)
+  end
+
+  @doc """
+  Libraries with item counts + latest scan job for admin UI.
+  """
+  def list_libraries_with_stats do
+    counts =
+      from(i in Item,
+        group_by: i.library_id,
+        select: {i.library_id, count(i.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    latest_jobs =
+      from(j in ScanJob,
+        distinct: j.library_id,
+        order_by: [asc: j.library_id, desc: j.inserted_at, desc: j.id]
+      )
+      |> Repo.all()
+      |> Map.new(&{&1.library_id, &1})
+
+    list_libraries()
+    |> Enum.map(fn lib ->
+      lib
+      |> Map.put(:item_count, Map.get(counts, lib.id, 0))
+      |> Map.put(:latest_scan, Map.get(latest_jobs, lib.id))
+    end)
   end
 
   def get_library(id) do
@@ -161,6 +232,26 @@ defmodule Hivefin.Library.LibraryContext do
     |> where([i], i.id == ^id)
     |> preload([:parent, :images, media_sources: :media_streams])
     |> Repo.one()
+  end
+
+  @doc """
+  Runtime in Jellyfin ticks for an item (first media source with duration).
+  Used for resume completion / played-percentage.
+  """
+  def item_runtime_ticks(id) do
+    id = Id.coerce(id)
+
+    if is_nil(id) do
+      nil
+    else
+      from(ms in MediaSource,
+        where: ms.item_id == ^id and not is_nil(ms.duration_ticks) and ms.duration_ticks > 0,
+        order_by: [asc: ms.inserted_at],
+        limit: 1,
+        select: ms.duration_ticks
+      )
+      |> Repo.one()
+    end
   end
 
   @doc """

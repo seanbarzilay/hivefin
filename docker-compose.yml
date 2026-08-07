@@ -1,0 +1,82 @@
+# Hivefin + Postgres stack for self-hosted deploy.
+#
+# Quick start:
+#   cp .env.example .env
+#   # edit .env — set SECRET_KEY_BASE, admin password, media path
+#   docker compose up -d --build
+#
+# Admin:  http://HOST:4000/admin
+# API:    http://HOST:4000  (point jellyfin-vue / clients here)
+#
+# Mount your media under ./media or set MEDIA_HOST_PATH in .env.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hivefin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-hivefin}
+    volumes:
+      - hivefin_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hivefin} -d ${POSTGRES_DB:-hivefin}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Bind only on the compose network by default (no host port).
+    # Uncomment to expose Postgres on the host:
+    # ports:
+    #   - "5432:5432"
+
+  hivefin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hivefin:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${HIVEFIN_PORT:-4000}:4000"
+    environment:
+      PHX_SERVER: "true"
+      PORT: "4000"
+      # Listen on all interfaces inside the container
+      HIVEFIN_HTTP_IP: "0.0.0.0"
+      # Plain HTTP by default for LAN / first deploy. Set true behind TLS reverse proxy.
+      HIVEFIN_FORCE_SSL: ${HIVEFIN_FORCE_SSL:-false}
+      PHX_SCHEME: ${PHX_SCHEME:-http}
+      PHX_URL_PORT: ${PHX_URL_PORT:-4000}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env}
+      DATABASE_URL: ecto://${POSTGRES_USER:-hivefin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hivefin}
+      POOL_SIZE: ${POOL_SIZE:-10}
+      HIVEFIN_ADMIN_USER: ${HIVEFIN_ADMIN_USER:-admin}
+      HIVEFIN_ADMIN_PASSWORD: ${HIVEFIN_ADMIN_PASSWORD:?set HIVEFIN_ADMIN_PASSWORD in .env}
+      HIVEFIN_SERVER_NAME: ${HIVEFIN_SERVER_NAME:-Hivefin}
+      # Advertised address for Jellyfin discovery (use your LAN IP or public URL)
+      HIVEFIN_LOCAL_ADDRESS: ${HIVEFIN_LOCAL_ADDRESS:-http://localhost:4000}
+      HIVEFIN_TMDB_API_KEY: ${HIVEFIN_TMDB_API_KEY:-}
+      HIVEFIN_HW_ACCEL: ${HIVEFIN_HW_ACCEL:-auto}
+      HIVEFIN_MAX_TRANSCODES: ${HIVEFIN_MAX_TRANSCODES:-2}
+      HIVEFIN_IMAGE_CACHE_DIR: /data/image-cache
+      HIVEFIN_TRANSCODE_DIR: /data/transcode
+    volumes:
+      # Media libraries (read-only recommended). Map host path → /media in container.
+      - ${MEDIA_HOST_PATH:-./media}:/media:ro
+      - hivefin_image_cache:/data/image-cache
+      - hivefin_transcode:/data/transcode
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/readyz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+
+volumes:
+  hivefin_pgdata:
+  hivefin_image_cache:
+  hivefin_transcode:

@@ -1,0 +1,109 @@
+<Layouts.admin flash={@flash} current_user={@current_user} active={@active}>
+  <.page_header title="Settings">
+    Server identity and metadata provider
+  </.page_header>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <.card>
+      <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+        Server
+      </h2>
+      <.form for={%{}} as={:settings} action={~p"/admin/settings"} method="post" class="space-y-4">
+        <.input
+          name="settings[server_name]"
+          label="Server name"
+          value={@settings.server_name}
+          required={true}
+        />
+        <p class="text-xs text-base-content/50">
+          Shown to Jellyfin clients as <code class="text-xs">ServerName</code>.
+        </p>
+
+        <h2 class="pt-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+          TMDB metadata
+        </h2>
+
+        <div class="rounded-lg border border-base-300 bg-base-100/50 px-3 py-2 text-sm">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-base-content/60">API key</span>
+            <%= if @settings.tmdb_api_key_set do %>
+              <span class="font-mono text-xs">{@settings.tmdb_api_key_hint}</span>
+            <% else %>
+              <span class="badge badge-ghost badge-sm">not set</span>
+            <% end %>
+          </div>
+          <div class="mt-1 text-xs text-base-content/50">
+            Source:
+            <%= case @settings.tmdb_api_key_source do %>
+              <% :database -> %>
+                admin database
+              <% :env -> %>
+                env <code>HIVEFIN_TMDB_API_KEY</code>
+              <% :none -> %>
+                none (metadata matching disabled)
+            <% end %>
+          </div>
+        </div>
+
+        <.input
+          name="settings[tmdb_api_key]"
+          type="password"
+          label="New TMDB API key"
+          placeholder="Leave blank to keep current"
+          autocomplete="off"
+        />
+
+        <.input
+          name="settings[tmdb_rate_limit_per_sec]"
+          type="number"
+          label="TMDB requests per second"
+          value={@settings.tmdb_rate_limit_per_sec}
+          min="1"
+          max="100"
+          required={true}
+        />
+
+        <p class="text-xs text-base-content/50">
+          Base URL: <code class="text-xs">{@settings.tmdb_base_url}</code>
+          (env / config only)
+        </p>
+
+        <div class="flex flex-wrap gap-2">
+          <.button type="submit">Save settings</.button>
+        </div>
+      </.form>
+
+      <.form
+        :if={@settings.tmdb_api_key_source == :database}
+        for={%{}}
+        action={~p"/admin/settings/tmdb-key"}
+        method="post"
+        class="mt-4 border-t border-base-300 pt-4"
+        onsubmit="return confirm('Clear the stored TMDB API key?')"
+      >
+        <input type="hidden" name="_method" value="delete" />
+        <.button type="submit" variant="danger">Clear stored TMDB key</.button>
+      </.form>
+    </.card>
+
+    <.card>
+      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+        Notes
+      </h2>
+      <ul class="list-disc space-y-2 pl-5 text-sm text-base-content/70">
+        <li>
+          Settings here persist in Postgres and override process defaults after save / restart.
+        </li>
+        <li>
+          <code class="text-xs">HIVEFIN_TMDB_API_KEY</code> is still read on boot if no DB key is stored.
+        </li>
+        <li>
+          Movie scans enqueue TMDB lookups when a key is configured; without a key, library scan still works.
+        </li>
+        <li>
+          Rate limit is applied in-process via the metadata rate limiter.
+        </li>
+      </ul>
+    </.card>
+  </div>
+</Layouts.admin>

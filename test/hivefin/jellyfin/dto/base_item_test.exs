@@ -185,5 +185,41 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert stream["Type"] == "Video"
     assert stream["Codec"] == "h264"
     assert stream["Width"] == 1920
+    # jellyfin-vue stream pickers only render DisplayTitle
+    assert stream["DisplayTitle"] == "1080p H264 - Default"
+  end
+
+  test "builds DisplayTitle and ChannelLayout for audio streams" do
+    item = %Item{
+      id: Ecto.UUID.generate(),
+      name: "X",
+      type: :movie,
+      sort_name: "x",
+      media_sources: [
+        %MediaSource{
+          id: Ecto.UUID.generate(),
+          path: "/secret/media/movie.mkv",
+          container: "mkv",
+          media_streams: [
+            %MediaStream{
+              id: Ecto.UUID.generate(),
+              index: 1,
+              type: :audio,
+              codec: "aac",
+              language: "eng",
+              channels: 2,
+              is_default: true,
+              is_forced: false
+            }
+          ]
+        }
+      ]
+    }
+
+    dto = BaseItem.from_item(item, fields: ["MediaSources"])
+    assert [stream] = hd(dto["MediaSources"])["MediaStreams"]
+    assert stream["Type"] == "Audio"
+    assert stream["ChannelLayout"] == "2.0"
+    assert stream["DisplayTitle"] == "English AAC Stereo - Default"
   end
 end

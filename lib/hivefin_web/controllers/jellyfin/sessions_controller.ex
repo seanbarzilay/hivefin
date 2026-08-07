@@ -7,7 +7,11 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
 
   alias Hivefin.Accounts
   alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
-  alias Hivefin.Library.UserData
+  alias Hivefin.Library.{LibraryContext, UserData}
+
+  # Jellyfin-compatible: past this fraction of runtime, treat as finished
+  # (clears resume / shows watched). Vue only sends PositionTicks, never Played.
+  @completion_ratio 0.90
 
   @doc """
   `GET /Sessions` — active device sessions for the current user (access tokens).
@@ -115,16 +119,16 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
     user = conn.assigns.current_user
     item_id = params["ItemId"] || params["itemId"] || params["item_id"]
     position = parse_int(params["PositionTicks"] || params["positionTicks"])
+    explicit_played = parse_bool(params["Played"] || params["played"])
+    explicit_pct = parse_float(params["PlayedPercentage"] || params["playedPercentage"])
 
     if is_binary(item_id) and item_id != "" do
       attrs =
         %{last_played_date: now()}
         |> maybe_put(:playback_position_ticks, position)
-        |> maybe_put(
-          :played_percentage,
-          parse_float(params["PlayedPercentage"] || params["playedPercentage"])
-        )
-        |> maybe_put(:played, parse_bool(params["Played"] || params["played"]))
+        |> maybe_put(:played_percentage, explicit_pct)
+        |> maybe_put(:played, explicit_played)
+        |> apply_completion(user.id, item_id, position, explicit_played, explicit_pct)
 
       case UserData.upsert(user.id, item_id, attrs) do
         {:ok, _} ->
@@ -142,6 +146,63 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
       conn
       |> put_status(:no_content)
       |> send_resp(:no_content, "")
+    end
+  end
+
+  # When the client does not set Played, complete if position is near the end.
+  defp apply_completion(attrs, user_id, item_id, position, explicit_played, explicit_pct) do
+    runtime = LibraryContext.item_runtime_ticks(item_id)
+
+    attrs =
+      if is_nil(explicit_pct) and is_integer(position) and is_integer(runtime) and runtime > 0 do
+        pct = position / runtime * 100.0
+        Map.put(attrs, :played_percentage, pct |> min(100.0) |> Float.round(1))
+      else
+        attrs
+      end
+
+    cond do
+      # Client explicitly set Played — respect it (except clear resume on true)
+      explicit_played == true ->
+        attrs
+        |> Map.put(:playback_position_ticks, 0)
+        |> Map.put(:played_percentage, 100.0)
+        |> maybe_increment_play_count(user_id, item_id)
+
+      explicit_played == false ->
+        attrs
+
+      is_integer(position) and is_integer(runtime) and runtime > 0 and
+          completed_position?(position, runtime) ->
+        attrs
+        |> Map.put(:played, true)
+        |> Map.put(:playback_position_ticks, 0)
+        |> Map.put(:played_percentage, 100.0)
+        |> maybe_increment_play_count(user_id, item_id)
+
+      true ->
+        attrs
+    end
+  end
+
+  defp completed_position?(position, runtime) when runtime > 0 do
+    position >= trunc(runtime * @completion_ratio) or position >= runtime
+  end
+
+  defp completed_position?(_, _), do: false
+
+  defp maybe_increment_play_count(attrs, user_id, item_id) do
+    # Only bump when transitioning into played; avoid double-count on progress spam
+    # once already marked played (unless client is re-finishing with position at end).
+    case UserData.get(user_id, item_id) do
+      %{played: true, play_count: n} when is_integer(n) and n > 0 ->
+        attrs
+
+      %{play_count: n} when is_integer(n) ->
+        Map.put(attrs, :play_count, n + 1)
+
+      _ ->
+        Map.put(attrs, :play_count, 1)
     end
   end
 
