@@ -24,4 +24,15 @@ defmodule Hivefin.Jellyfin.AuthTest do
     assert {:ok, parsed} = Auth.parse_authorization(header)
     assert parsed.token == nil
   end
+
+  test "decodes encodeURIComponent field values from SDK" do
+    header =
+      "MediaBrowser Client=\"Jellyfin%20Web%20(Vue)\", Device=\"Chrome\", DeviceId=\"abc\", Version=\"0.0.0\", Token=\"tok\""
+
+    assert {:ok, parsed} = Auth.parse_authorization(header)
+    assert parsed.client == "Jellyfin Web " <> "(Vue)"
+  end
 end
+
+
+

@@ -48,6 +48,10 @@ defmodule HivefinWeb.Router do
     get "/Users/Me", UserController, :me
 
     get "/Users/:user_id/Views", ItemsController, :views
+    # Modern SDK paths used by jellyfin-vue fetchIndexPage after login
+    get "/UserViews", ItemsController, :user_views
+    get "/Items/Latest", ItemsController, :latest
+    get "/UserItems/Resume", ItemsController, :user_items_resume
     # Resume before Items/:item_id so "Resume" is not captured as an id
     get "/Users/:user_id/Items/Resume", ItemsController, :resume
     get "/Users/:user_id/Items", ItemsController, :index
@@ -69,6 +73,7 @@ defmodule HivefinWeb.Router do
     post "/Sessions/Playing/Progress", SessionsController, :progress
     post "/Sessions/Playing/Stopped", SessionsController, :stopped
   end
+
 
   scope "/api", HivefinWeb do
     pipe_through :api

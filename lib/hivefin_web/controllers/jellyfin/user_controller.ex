@@ -7,10 +7,19 @@ defmodule HivefinWeb.Jellyfin.UserController do
   alias Hivefin.Jellyfin.SystemInfo
 
   def authenticate_by_name(conn, params) do
-    username = params["Username"] || params["username"]
-    password = params["Pw"] || params["Password"] || params["pw"] || params["password"]
+    # SDK may send flat {Username,Pw} or nested {authenticateUserByName: {...}}
+    creds =
+      case params do
+        %{"authenticateUserByName" => nested} when is_map(nested) -> nested
+        %{"AuthenticateUserByName" => nested} when is_map(nested) -> nested
+        other -> other
+      end
+
+    username = creds["Username"] || creds["username"]
+    password = creds["Pw"] || creds["Password"] || creds["pw"] || creds["password"]
 
     device_attrs = device_attrs_from_conn(conn)
+
 
     with true <- is_binary(username) and username != "",
          true <- is_binary(password),

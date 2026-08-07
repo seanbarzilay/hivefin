@@ -12,6 +12,56 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     json(conn, BaseItem.query_result(items, length(items)))
   end
 
+  @doc """
+  Modern SDK path: `GET /UserViews` (jellyfin-vue fetchIndexPage).
+  Same payload as `GET /Users/:id/Views`.
+  """
+  def user_views(conn, params), do: views(conn, params)
+
+  @doc """
+  Modern SDK path: `GET /Items/Latest` — returns a JSON **array** of BaseItemDto
+  (not a QueryResult). Used after login by jellyfin-vue.
+  """
+  def latest(conn, params) do
+    user = conn.assigns.current_user
+    parent_id = blank_to_nil(params["ParentId"] || params["parentId"])
+    limit = clamp_non_neg(parse_int(params["Limit"] || params["limit"])) || 16
+    fields = parse_fields(params["Fields"] || params["fields"])
+
+    {entries, _total} =
+      LibraryContext.list_items_for_parent(parent_id,
+        include_item_types: ["Movie", "Episode", "Series"],
+        recursive: true,
+        limit: limit,
+        start_index: 0,
+        sort_by: "DateCreated"
+      )
+
+    user_data_map = user_data_map_for(conn, entries)
+
+    items =
+      Enum.map(entries, fn
+        %Item{} = item ->
+          BaseItem.from_item(item, fields: fields, user_data: user_data_for(item, user_data_map))
+
+        %Library{} = library ->
+          BaseItem.from_library(library)
+      end)
+
+    # SDK expects a bare array, not {Items, TotalRecordCount}
+    _ = user
+    json(conn, items)
+  end
+
+  @doc """
+  Modern SDK path: `GET /UserItems/Resume` (same as Users/:id/Items/Resume).
+  """
+  def user_items_resume(conn, params) do
+    user_id = conn.assigns.current_user.id
+    resume(conn, Map.put(params, "user_id", user_id))
+  end
+
+
   def index(conn, params) do
     parent_id = blank_to_nil(params["ParentId"] || params["parentId"])
     opts = browse_opts(params)

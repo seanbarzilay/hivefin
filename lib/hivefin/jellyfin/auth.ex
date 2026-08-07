@@ -20,7 +20,7 @@ defmodule Hivefin.Jellyfin.Auth do
     if String.contains?(header, "MediaBrowser") do
       fields =
         Regex.scan(@field, header)
-        |> Map.new(fn [_, k, v] -> {field_key(k), v} end)
+        |> Map.new(fn [_, k, v] -> {field_key(k), decode_value(v)} end)
 
       {:ok,
        %{
@@ -41,6 +41,19 @@ defmodule Hivefin.Jellyfin.Auth do
   defp field_key("Version"), do: :version
   defp field_key("Token"), do: :token
 
+  # @jellyfin/sdk uses encodeURIComponent on header field values
+  defp decode_value(nil), do: nil
+
+  defp decode_value(v) when is_binary(v) do
+    try do
+      URI.decode_www_form(v)
+    rescue
+      _ -> v
+    end
+  end
+
+
   defp empty_to_nil(""), do: nil
   defp empty_to_nil(v), do: v
 end
+
