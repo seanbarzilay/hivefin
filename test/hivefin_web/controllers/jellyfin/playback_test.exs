@@ -317,7 +317,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     Hivefin.Playback.Session.stop(hold)
   end
 
-  test "PlaybackInfo transcode uses progressive fMP4 http URL not hls master", %{
+  test "PlaybackInfo transcode uses HLS master URL for jellyfin-vue", %{
     conn: conn,
     movie: movie
   } do
@@ -337,14 +337,14 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
     assert %{"MediaSources" => [ms]} = json_response(conn, 200)
     assert ms["SupportsTranscoding"] == true
-    assert ms["TranscodingSubProtocol"] == "http"
-    assert ms["TranscodingContainer"] == "mp4"
-    assert ms["TranscodingUrl"] =~ "stream.mp4"
+    assert ms["SupportsDirectStream"] == false
+    assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingContainer"] == "ts"
+    assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Transcode=true"
-    refute ms["TranscodingUrl"] =~ "master.m3u8"
   end
 
-  test "PlaybackInfo mkv profile yields DirectStream remux URL", %{
+  test "PlaybackInfo mkv profile yields HLS remux URL without DirectStream flag", %{
     conn: conn,
     movie: movie,
     source: source
@@ -368,10 +368,13 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert %{"MediaSources" => [ms]} = json_response(conn, 200)
     assert ms["Id"] == Id.format(source.id)
     assert ms["SupportsDirectPlay"] == false
-    assert ms["SupportsDirectStream"] == true
+    # Must be false: jellyfin-vue builds Static=true stream.Container when true
+    assert ms["SupportsDirectStream"] == false
     assert is_binary(ms["TranscodingUrl"])
-    assert ms["TranscodingUrl"] =~ "stream.mp4"
-    assert ms["TranscodingContainer"] == "mp4"
+    assert ms["TranscodingUrl"] =~ "master.m3u8"
+    assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingContainer"] == "ts"
+    refute ms["TranscodingUrl"] =~ "Transcode=true"
     refute Map.has_key?(ms, "Path")
   end
 end

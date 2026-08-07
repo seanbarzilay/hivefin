@@ -43,17 +43,45 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   end
 
   @doc """
-  Legacy path kept for older clients. Progressive MPEG-TS transcode (not HLS).
+  HLS master playlist for remux/transcode.
 
-  Prefer `TranscodingUrl` from PlaybackInfo (`stream.mp4?...&Transcode=true`).
+  jellyfin-vue always feeds non-DirectPlay URLs into hls.js, so PlaybackInfo
+  TranscodingUrl points here (`TranscodingSubProtocol=hls`).
   Concurrent session limit exhausted → 503.
   """
   def master_m3u8(conn, %{"item_id" => path_id} = params) do
     case authorize_stream(path_id, params) do
       {:ok, claims, path} ->
-        conn
-        |> assign(:stream_claims, claims)
-        |> then(&stream_ffmpeg(&1, path, params, :transcode))
+        conn = assign(conn, :stream_claims, claims)
+        mode = if transcode_request?(params), do: :transcode, else: :remux
+        serve_hls_playlist(conn, path, params, mode)
+
+      {:error, reason} ->
+        stream_error(conn, reason)
+    end
+  end
+
+  @doc """
+  Serves an HLS media segment produced by an active FFmpeg session.
+  """
+  def hls_segment(conn, %{"item_id" => path_id, "session_id" => session_id, "file" => file} = params) do
+    case authorize_stream(path_id, params) do
+      {:ok, _claims, _path} ->
+        case Session.segment_path(session_id, file) do
+          {:ok, segment} ->
+            _ = Session.keepalive(session_id)
+
+            conn
+            |> put_resp_content_type(segment_content_type(file), nil)
+            |> put_resp_header("cache-control", "no-cache")
+            |> send_file(200, segment)
+
+          {:error, :invalid} ->
+            conn |> put_status(:bad_request) |> json(%{"error" => "invalid_segment"})
+
+          {:error, _} ->
+            conn |> put_status(:not_found) |> json(%{"error" => "segment_not_found"})
+        end
 
       {:error, reason} ->
         stream_error(conn, reason)
@@ -209,6 +237,112 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
+  defp serve_hls_playlist(conn, path, params, mode) when mode in [:remux, :transcode] do
+    claims = conn.assigns[:stream_claims] || %{}
+    client_session_id = play_session_id(params)
+
+    session_id =
+      Supervisor.registry_id(client_session_id, %{
+        user_id: Map.get(claims, :user_id),
+        media_source_id:
+          Map.get(claims, :media_source_id) ||
+            params["MediaSourceId"] ||
+            params["mediaSourceId"],
+        mode: mode,
+        input_path: path
+      })
+
+    attrs =
+      case mode do
+        :remux ->
+          %{id: session_id, mode: :remux, input_path: path, format: "hls"}
+
+        :transcode ->
+          %{
+            id: session_id,
+            mode: :transcode,
+            input_path: path,
+            format: "hls",
+            height: height_from_params(params)
+          }
+      end
+
+    case Supervisor.start_session(attrs) do
+      {:ok, pid} ->
+        case Session.await_ready(pid, 30_000) do
+          {:ok, :hls} ->
+            info = Session.info(pid)
+            playlist_path = info.playlist_path
+
+            case File.read(playlist_path) do
+              {:ok, body} ->
+                token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
+                item_id = Id.format(params["item_id"] || Map.get(claims, :item_id))
+                rewritten = rewrite_hls_playlist(body, item_id, session_id, token)
+
+                conn
+                |> put_resp_content_type("application/vnd.apple.mpegurl", nil)
+                |> put_resp_header("cache-control", "no-cache")
+                |> send_resp(200, rewritten)
+
+              {:error, reason} ->
+                Logger.warning("hls playlist read failed: #{inspect(reason)}")
+                conn |> put_status(:internal_server_error) |> json(%{"error" => "playlist_missing"})
+            end
+
+          {:ok, _} ->
+            conn |> put_status(:internal_server_error) |> json(%{"error" => "not_hls"})
+
+          {:error, :timeout} ->
+            conn |> put_status(:gateway_timeout) |> json(%{"error" => "session_timeout"})
+
+          {:error, reason} ->
+            Logger.warning("hls session not ready: #{inspect(reason)}")
+            conn |> put_status(:internal_server_error) |> json(%{"error" => "session_failed"})
+        end
+
+      {:error, :busy} ->
+        conn
+        |> put_status(:service_unavailable)
+        |> json(%{"error" => "too_many_transcodes", "message" => "Transcode capacity reached"})
+
+      {:error, reason} ->
+        Logger.warning("hls #{mode} session failed: #{inspect(reason)}")
+        conn |> put_status(:internal_server_error) |> json(%{"error" => "hls_failed"})
+    end
+  end
+
+  defp rewrite_hls_playlist(body, item_id, session_id, token) when is_binary(body) do
+    token_q = URI.encode_www_form(token)
+
+    body
+    |> String.split("\n")
+    |> Enum.map(fn line ->
+      trimmed = String.trim(line)
+
+      cond do
+        trimmed == "" or String.starts_with?(trimmed, "#") ->
+          line
+
+        Regex.match?(~r/^seg_\d+\.(ts|m4s)$/i, Path.basename(trimmed)) ->
+          name = Path.basename(trimmed)
+
+          "/Videos/#{item_id}/hls/#{session_id}/#{name}?api_key=#{token_q}"
+
+        true ->
+          line
+      end
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp segment_content_type(file) do
+    case Path.extname(file) |> String.downcase() do
+      ".m4s" -> "video/iso.segment"
+      _ -> "video/mp2t"
+    end
+  end
+
   defp stream_pipe(conn, pid, content_type) do
     Session.attach_consumer(pid, self())
 
@@ -217,7 +351,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         {:ok, _} ->
           conn =
             conn
-            |> put_resp_content_type(content_type)
+            |> put_resp_content_type(content_type, nil)
             |> send_chunked(200)
 
           pump_chunks(conn, pid)
@@ -234,7 +368,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
             {:ok, data} when byte_size(data) > 0 ->
               conn =
                 conn
-                |> put_resp_content_type(content_type)
+                |> put_resp_content_type(content_type, nil)
                 |> send_chunked(200)
 
               case chunk(conn, data) do
@@ -327,7 +461,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   defp send_media_file(conn, path) do
     {:ok, %{size: size}} = File.stat(path)
-    content_type = MIME.from_path(path)
+    content_type = media_content_type(path)
 
     conn =
       conn
@@ -406,4 +540,21 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   end
 
   defp parse_byte_range(_, _), do: :error
+
+  defp media_content_type(path) do
+    case Path.extname(path) |> String.downcase() do
+      ".mkv" -> "video/x-matroska"
+      ".mp4" -> "video/mp4"
+      ".m4v" -> "video/mp4"
+      ".webm" -> "video/webm"
+      ".ts" -> "video/mp2t"
+      ".m2ts" -> "video/mp2t"
+      ".avi" -> "video/x-msvideo"
+      other ->
+        case MIME.from_path(path) do
+          "application/octet-stream" when other != "" -> "video/mp4"
+          type -> type
+        end
+    end
+  end
 end

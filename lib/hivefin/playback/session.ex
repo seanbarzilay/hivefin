@@ -136,6 +136,29 @@ defmodule Hivefin.Playback.Session do
   def info(pid) when is_pid(pid), do: GenServer.call(pid, :info)
   def info(id) when is_binary(id), do: GenServer.call(via(id), :info)
 
+  @doc """
+  Marks session activity (keeps idle timer from reaping HLS producers while
+  the client is still fetching segments).
+  """
+  @spec keepalive(pid() | String.t()) :: :ok
+  def keepalive(pid) when is_pid(pid), do: GenServer.call(pid, :keepalive)
+  def keepalive(id) when is_binary(id), do: GenServer.call(via(id), :keepalive)
+
+  @doc """
+  Returns the absolute path to a file inside the session temp dir, or error.
+  """
+  @spec segment_path(pid() | String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, :not_found | :invalid}
+  def segment_path(session, filename)
+
+  def segment_path(pid, filename) when is_pid(pid) and is_binary(filename) do
+    GenServer.call(pid, {:segment_path, filename})
+  end
+
+  def segment_path(id, filename) when is_binary(id) and is_binary(filename) do
+    GenServer.call(via(id), {:segment_path, filename})
+  end
+
   @spec stop(pid() | String.t()) :: :ok
   def stop(pid) when is_pid(pid) do
     GenServer.stop(pid, :normal, 5_000)
@@ -269,6 +292,32 @@ defmodule Hivefin.Playback.Session do
        buffered: byte_size(state.buffer),
        consumers: map_size(state.consumers)
      }, touch(state)}
+  end
+
+  def handle_call(:keepalive, _from, state) do
+    {:reply, :ok, touch(state)}
+  end
+
+  def handle_call({:segment_path, filename}, _from, state) do
+    reply =
+      cond do
+        not safe_segment_name?(filename) ->
+          {:error, :invalid}
+
+        is_nil(state.temp_dir) ->
+          {:error, :not_found}
+
+        true ->
+          path = Path.join(state.temp_dir, filename)
+
+          if File.regular?(path) do
+            {:ok, path}
+          else
+            {:error, :not_found}
+          end
+      end
+
+    {:reply, reply, touch(state)}
   end
 
   def handle_call({:attach_consumer, consumer}, _from, state) do
@@ -439,6 +488,27 @@ defmodule Hivefin.Playback.Session do
   end
 
   # Internals
+
+  defp start_ffmpeg(%{mode: :remux, format: "hls"} = state) do
+    playlist = Path.join(state.temp_dir, "index.m3u8")
+    segment_pattern = Path.join(state.temp_dir, "seg_%03d.ts")
+
+    args =
+      Args.remux(state.input_path, %{
+        output: playlist,
+        format: "hls",
+        hls_segment_pattern: segment_pattern
+      })
+
+    case open_port(state, args) do
+      {:ok, state} ->
+        Process.send_after(self(), :poll_playlist, 100)
+        {:ok, %{state | playlist_path: playlist}}
+
+      error ->
+        error
+    end
+  end
 
   defp start_ffmpeg(%{mode: :remux} = state) do
     args =
@@ -673,13 +743,19 @@ defmodule Hivefin.Playback.Session do
     path == base or String.starts_with?(path, base <> "/")
   end
 
+  defp safe_segment_name?(name) when is_binary(name) do
+    # FFmpeg hls_segment_filename pattern: seg_%03d.ts
+    Regex.match?(~r/^seg_\d{3,6}\.(ts|m4s)$/, name)
+  end
+
+  defp safe_segment_name?(_), do: false
+
   defp default_height(:transcode), do: 720
   defp default_height(:remux), do: nil
 
-  # Progressive fragmented MP4 for HTML5 playback (not MPEG-TS).
+  # Progressive defaults; HLS sessions pass format: "hls" explicitly.
   defp default_format(:remux), do: "mp4"
   defp default_format(:transcode), do: "mp4"
-  defp default_format(_), do: "mp4"
 
   defp allow_cpu_fallback_default do
     case Application.get_env(:hivefin, :allow_cpu_fallback, true) do

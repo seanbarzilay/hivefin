@@ -11,7 +11,9 @@ defmodule Hivefin.Playback.FFmpeg.Args do
 
   @type remux_opts :: %{
           required(:output) => String.t(),
-          optional(:format) => String.t()
+          optional(:format) => String.t(),
+          optional(:hls_segment_pattern) => String.t(),
+          optional(:hls_time) => pos_integer()
         }
 
   @type transcode_opts :: %{
@@ -33,8 +35,10 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   Builds args for container remux (stream copy, no re-encode).
 
   ## Options
-  - `:output` — path or `"pipe:1"`
-  - `:format` — container format (default `"mp4"` fragmented progressive)
+  - `:output` — path, `"pipe:1"`, or HLS playlist path
+  - `:format` — `"mp4"` (default fragmented progressive), `"mpegts"`, or `"hls"`
+  - `:hls_segment_pattern` — required when format is `"hls"`
+  - `:hls_time` — segment duration seconds (default 2)
   """
   @spec remux(String.t(), remux_opts() | map()) :: [String.t()]
   def remux(input, opts) when is_binary(input) and is_map(opts) do
@@ -52,8 +56,11 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-map",
       "0:a:0?",
       "-c",
-      "copy"
-    ] ++ container_args(format, output)
+      "copy",
+      # Drop data/attachment streams that break MPEG-TS remux.
+      "-dn",
+      "-sn"
+    ] ++ container_args(format, output, opts)
   end
 
   @doc """
@@ -133,8 +140,6 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     do: ["-vf", "scale=-2:#{height},format=yuv420p"]
 
   defp scale_args(_), do: ["-vf", "format=yuv420p"]
-
-  defp container_args(format, output), do: container_args(format, output, %{})
 
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)

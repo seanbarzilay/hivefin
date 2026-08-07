@@ -19,12 +19,27 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
                "0:a:0?",
                "-c",
                "copy",
+               "-dn",
+               "-sn",
                "-f",
                "mp4",
                "-movflags",
                "frag_keyframe+empty_moov+default_base_moof",
                "pipe:1"
              ]
+    end
+
+    test "remux to hls includes segment pattern" do
+      args =
+        Args.remux("/in.mkv", %{
+          output: "/tmp/index.m3u8",
+          format: "hls",
+          hls_segment_pattern: "/tmp/seg_%03d.ts"
+        })
+
+      assert "hls" in args
+      assert "-hls_segment_filename" in args
+      assert "/tmp/seg_%03d.ts" in args
     end
 
     test "allows custom output path and format" do

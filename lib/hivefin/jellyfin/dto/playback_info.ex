@@ -94,10 +94,10 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     # Path uses media source id (jellyfin-vue convention)
     url = direct_stream_url(source_id, source_id, token, static: true)
 
-
-
     Map.merge(base, %{
       "SupportsDirectPlay" => true,
+      # jellyfin-vue builds Static=true stream.{Container} when SupportsDirectStream
+      # is true — only safe when DirectPlay is also true.
       "SupportsDirectStream" => true,
       "SupportsTranscoding" => false,
       "DirectStreamUrl" => url,
@@ -108,26 +108,26 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     })
   end
 
-  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, meta) do
-    # Progressive fragmented MP4 remux — playable in HTML5 video elements.
-    container = Map.get(meta, :remux_container, "mp4")
-    url = remux_url(item_id, source_id, token, session, container)
+  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, _meta) do
+    # Remux via HLS — jellyfin-vue always feeds non-DirectPlay URLs into hls.js.
+    url = hls_url(item_id, source_id, token, session, transcode: false)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
-      "SupportsDirectStream" => true,
+      # Must be false: vue treats SupportsDirectStream as Static=true original file.
+      "SupportsDirectStream" => false,
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
-      "TranscodingSubProtocol" => "http",
-      "TranscodingContainer" => container,
+      "TranscodingSubProtocol" => "hls",
+      "TranscodingContainer" => "ts",
       "IsRemote" => false
     })
   end
 
   defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
-    # Progressive fragmented MP4 (H.264/AAC) over HTTP — not multi-segment HLS.
-    url = transcode_url(item_id, source_id, token, session)
+    # H.264/AAC HLS — required by jellyfin-vue (hls.js for all non-DirectPlay).
+    url = hls_url(item_id, source_id, token, session, transcode: true)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
@@ -135,8 +135,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
-      "TranscodingSubProtocol" => "http",
-      "TranscodingContainer" => "mp4",
+      "TranscodingSubProtocol" => "hls",
+      "TranscodingContainer" => "ts",
       "IsRemote" => false
     })
   end
@@ -149,18 +149,12 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     "/Videos/#{path_id}/stream?MediaSourceId=#{encode(source_id)}&Static=#{static}&api_key=#{encode(token)}"
   end
 
-  defp remux_url(item_id, source_id, token, session, container) do
+  defp hls_url(item_id, source_id, token, session, opts) do
     item_id = Id.format(item_id)
     source_id = Id.format(source_id)
+    transcode = if Keyword.get(opts, :transcode, false), do: "&Transcode=true", else: ""
 
-    "/Videos/#{item_id}/stream.#{container}?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false"
-  end
-
-  defp transcode_url(item_id, source_id, token, session) do
-    item_id = Id.format(item_id)
-    source_id = Id.format(source_id)
-
-    "/Videos/#{item_id}/stream.mp4?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false&Transcode=true"
+    "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
   end
 
 

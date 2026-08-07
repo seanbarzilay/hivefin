@@ -74,6 +74,7 @@ defmodule HivefinWeb.Router do
     get "/Videos/:item_id/stream", VideoController, :stream
     get "/Videos/:item_id/stream.:container", VideoController, :stream
     get "/Videos/:item_id/master.m3u8", VideoController, :master_m3u8
+    get "/Videos/:item_id/hls/:session_id/:file", VideoController, :hls_segment
   end
 
   scope "/", HivefinWeb.Jellyfin do
