@@ -51,6 +51,10 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "error",
       # Port has no TTY; avoid stdin control interference.
       "-nostdin",
+      # Rebuild a clean timeline from 0 so HLS clients do not see source offsets
+      # (many rips start at pts≈minutes).
+      "-fflags",
+      "+genpts",
       "-i",
       input,
       "-map",
@@ -61,7 +65,11 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "copy",
       # Drop data/attachment/subtitle streams that break TS/fMP4 remux.
       "-dn",
-      "-sn"
+      "-sn",
+      "-start_at_zero",
+      "-copyts",
+      "-avoid_negative_ts",
+      "make_zero"
     ] ++ container_args(format, output, opts)
   end
 
@@ -92,22 +100,40 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-loglevel",
       "error",
       "-nostdin",
+      "-fflags",
+      "+genpts",
       "-i",
       input,
       "-map",
       "0:v:0",
       "-map",
-      "0:a:0?"
+      "0:a:0?",
+      "-dn",
+      "-sn"
     ]
 
     video = video_encode_args(encoder, video_bitrate)
     # VAAPI injects its own -vf chain; skip software scale on that path.
-    # Always force 8-bit yuv420p so NVENC/libx264 accept 10-bit HDR sources.
-    scale = if encoder == :vaapi, do: [], else: scale_args(height)
-    audio = ["-c:a", "aac", "-ac", "2", "-b:a", audio_bitrate]
+    # setpts/asetpts force a timeline from 0 — source files often start at
+    # non-zero PTS which breaks hls.js after a few segments.
+    filters = if encoder == :vaapi, do: [], else: video_filter_args(height)
+    audio = [
+      "-c:a",
+      "aac",
+      "-ac",
+      "2",
+      "-ar",
+      "48000",
+      "-b:a",
+      audio_bitrate,
+      "-af",
+      "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
+    ]
+
+    ts_fix = ["-avoid_negative_ts", "make_zero", "-muxdelay", "0", "-muxpreload", "0"]
     out = container_args(format, output, opts)
 
-    base ++ video ++ scale ++ audio ++ out
+    base ++ video ++ filters ++ audio ++ ts_fix ++ out
   end
 
   # Fixed GOP so -hls_time segments actually split near the target duration.
@@ -129,7 +155,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-vaapi_device",
       "/dev/dri/renderD128",
       "-vf",
-      "format=nv12,hwupload",
+      "setpts=PTS-STARTPTS,format=nv12,hwupload",
       "-c:v",
       "h264_vaapi",
       "-b:v",
@@ -138,12 +164,15 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   end
 
   # Always convert to 8-bit 4:2:0 — required for h264_nvenc on 10-bit HEVC/HDR.
-  defp scale_args(nil), do: ["-vf", "format=yuv420p"]
+  # setpts resets timeline so segments start near t=0 for hls.js.
+  defp video_filter_args(nil),
+    do: ["-vf", "setpts=PTS-STARTPTS,format=yuv420p"]
 
-  defp scale_args(height) when is_integer(height) and height > 0,
-    do: ["-vf", "scale=-2:#{height},format=yuv420p"]
+  defp video_filter_args(height) when is_integer(height) and height > 0,
+    do: ["-vf", "setpts=PTS-STARTPTS,scale=-2:#{height},format=yuv420p"]
 
-  defp scale_args(_), do: ["-vf", "format=yuv420p"]
+  defp video_filter_args(_),
+    do: ["-vf", "setpts=PTS-STARTPTS,format=yuv420p"]
 
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)

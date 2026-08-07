@@ -12,6 +12,8 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
                "-loglevel",
                "error",
                "-nostdin",
+               "-fflags",
+               "+genpts",
                "-i",
                "/media/in.mkv",
                "-map",
@@ -22,6 +24,10 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
                "copy",
                "-dn",
                "-sn",
+               "-start_at_zero",
+               "-copyts",
+               "-avoid_negative_ts",
+               "make_zero",
                "-f",
                "mp4",
                "-movflags",
@@ -68,9 +74,11 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "-crf" in args
       assert "23" in args
       assert "-vf" in args
-      assert "scale=-2:720,format=yuv420p" in args
+      assert "setpts=PTS-STARTPTS,scale=-2:720,format=yuv420p" in args
       assert "-c:a" in args
       assert "aac" in args
+      assert "-af" in args
+      assert "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS" in args
       assert "-f" in args
       assert "mp4" in args
       assert "-movflags" in args
