@@ -1,5 +1,5 @@
 defmodule HivefinWeb.JellyfinSocketTest do
-  use ExUnit.Case, async: true
+  use Hivefin.DataCase, async: false
 
   alias HivefinWeb.JellyfinSocket
 
@@ -74,5 +74,82 @@ defmodule HivefinWeb.JellyfinSocketTest do
 
   test "terminate returns :ok" do
     assert :ok = JellyfinSocket.terminate(:remote, state())
+  end
+
+  describe "session registration and Sessions push" do
+    test "init registers the socket so it appears in Sessions.list/0" do
+      s = state()
+
+      assert {:push, _frame, _state} = JellyfinSocket.init(s)
+
+      assert Enum.any?(Hivefin.Sessions.list(), &(&1.session_id == s.session_id))
+    end
+
+    test "SessionsStart pushes a Sessions message and records the subscription" do
+      s = state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      assert {:push, {:text, json}, new_state} =
+               JellyfinSocket.handle_in(
+                 frame(%{"MessageType" => "SessionsStart", "Data" => "0,1500"}),
+                 s
+               )
+
+      decoded = Jason.decode!(json)
+      assert decoded["MessageType"] == "Sessions"
+      assert is_list(decoded["Data"])
+      assert MapSet.member?(new_state.subscriptions, "Sessions")
+    end
+
+    test "SessionsStop clears the subscription" do
+      s = state()
+      {:push, _, s} = JellyfinSocket.init(s)
+      {:push, _, s} = JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+      assert {:ok, new_state} =
+               JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStop"}), s)
+
+      refute MapSet.member?(new_state.subscriptions, "Sessions")
+    end
+
+    test "a jellyfin_push message is forwarded to the client verbatim" do
+      s = state()
+
+      assert {:push, {:text, json}, ^s} =
+               JellyfinSocket.handle_info(
+                 {:jellyfin_push, %{"MessageType" => "Play", "MessageId" => "x"}},
+                 s
+               )
+
+      assert Jason.decode!(json)["MessageType"] == "Play"
+    end
+
+    test "sessions_changed pushes Sessions only when subscribed" do
+      s = state()
+
+      # Not subscribed: no push.
+      assert {:ok, ^s} = JellyfinSocket.handle_info(:sessions_changed, s)
+
+      subscribed = %{s | subscriptions: MapSet.new(["Sessions"])}
+
+      assert {:push, {:text, json}, _} =
+               JellyfinSocket.handle_info(:sessions_changed, subscribed)
+
+      assert Jason.decode!(json)["MessageType"] == "Sessions"
+    end
+
+    test "every session in a Sessions push carries the required fields" do
+      s = state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      {:push, {:text, json}, _} =
+        JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+      for session <- Jason.decode!(json)["Data"],
+          key <- Hivefin.Jellyfin.Dto.Session.required_keys() do
+        assert Map.has_key?(session, key), "SessionInfoDto missing #{key}"
+        refute is_nil(session[key]), "SessionInfoDto #{key} is null"
+      end
+    end
   end
 end

@@ -11,7 +11,10 @@ defmodule HivefinWeb.JellyfinSocket do
 
   require Logger
 
+  alias Hivefin.Accounts
+  alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
   alias Hivefin.Jellyfin.WsMessage
+  alias Hivefin.Sessions
 
   # Advertised keepalive window, in seconds.
   @keep_alive_seconds 60
@@ -24,6 +27,15 @@ defmodule HivefinWeb.JellyfinSocket do
 
   @impl WebSock
   def init(state) do
+    :ok =
+      Sessions.register(state.session_id, %{
+        user_id: state.user_id,
+        device_id: state.device_id
+      })
+
+    :ok = Sessions.subscribe()
+    Sessions.broadcast_changed()
+
     {:push, {:text, WsMessage.force_keep_alive(@keep_alive_seconds)}, state}
   end
 
@@ -47,17 +59,52 @@ defmodule HivefinWeb.JellyfinSocket do
   def handle_in({_data, [opcode: _other]}, state), do: {:ok, state}
 
   @impl WebSock
+  def handle_info({:jellyfin_push, message}, state) do
+    {:push, {:text, Jason.encode!(message)}, state}
+  end
+
+  def handle_info(:sessions_changed, state) do
+    if MapSet.member?(state.subscriptions, "Sessions") do
+      {:push, {:text, sessions_message(state)}, state}
+    else
+      {:ok, state}
+    end
+  end
+
   def handle_info(_message, state), do: {:ok, state}
 
   @impl WebSock
-  def terminate(_reason, _state), do: :ok
+  def terminate(_reason, _state) do
+    # Registry entries are owned by this process and cleared on exit; the
+    # broadcast tells other sockets the list changed.
+    Sessions.broadcast_changed()
+    :ok
+  end
 
   defp dispatch("KeepAlive", state), do: {:push, {:text, WsMessage.keep_alive()}, state}
 
   defp dispatch(type, state) when type in @noop_types, do: {:ok, state}
 
+  defp dispatch("SessionsStart", state) do
+    state = %{state | subscriptions: MapSet.put(state.subscriptions, "Sessions")}
+    {:push, {:text, sessions_message(state)}, state}
+  end
+
+  defp dispatch("SessionsStop", state) do
+    {:ok, %{state | subscriptions: MapSet.delete(state.subscriptions, "Sessions")}}
+  end
+
   defp dispatch(type, state) do
     Logger.debug("jellyfin socket: unhandled MessageType #{inspect(type)}")
     {:ok, state}
+  end
+
+  defp sessions_message(state) do
+    sessions =
+      [user_id: state.user_id]
+      |> Accounts.list_access_tokens()
+      |> Enum.map(&SessionDto.from_access_token/1)
+
+    WsMessage.encode("Sessions", sessions)
   end
 end
