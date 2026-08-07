@@ -150,7 +150,21 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   end
 
   defp video_encode_args(:nvenc, bitrate) do
-    ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", bitrate, "-g", "96", "-forced-idr", "1"]
+    # fps_mode cfr is required on some NVENC builds so setpts/timeline resets stick.
+    [
+      "-c:v",
+      "h264_nvenc",
+      "-preset",
+      "p4",
+      "-b:v",
+      bitrate,
+      "-g",
+      "96",
+      "-forced-idr",
+      "1",
+      "-fps_mode",
+      "cfr"
+    ]
   end
 
   defp video_encode_args(:vaapi, bitrate) do

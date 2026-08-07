@@ -533,9 +533,14 @@ defmodule Hivefin.Playback.Session do
     playlist = Path.join(state.temp_dir, "index.m3u8")
     segment_pattern = Path.join(state.temp_dir, "seg_%03d.ts")
 
+    # h264_nvenc on this stack (Tesla P4 / FFmpeg 5.1) emits multi-minute PTS
+    # offsets that stall hls.js after a few segments. libx264 produces a clean
+    # timeline from t≈0. Progressive paths can still use HW encoders.
+    encoder = :libx264
+
     args =
       Args.transcode(state.input_path, %{
-        encoder: state.encoder,
+        encoder: encoder,
         output: playlist,
         format: "hls",
         hls_segment_pattern: segment_pattern,
