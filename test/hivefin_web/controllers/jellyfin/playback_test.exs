@@ -228,7 +228,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
   end
 
   @tag :ffmpeg
-  test "remux Static=false streams MPEG-TS", %{
+  test "remux Static=false streams progressive fMP4", %{
     movie: movie,
     source: source,
     user: user
@@ -238,7 +238,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn =
       build_conn()
-      |> get(~p"/Videos/#{movie.id}/stream.ts", %{
+      |> get(~p"/Videos/#{movie.id}/stream.mp4", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
         "Static" => "false",
@@ -246,13 +246,13 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
       })
 
     assert conn.status == 200
-    assert get_resp_header(conn, "content-type") |> List.first() =~ "video/mp2t"
+    assert get_resp_header(conn, "content-type") |> List.first() =~ "video/mp4"
     body = response(conn, 200)
     assert byte_size(body) > 0
   end
 
   @tag :ffmpeg
-  test "transcode progressive stream.ts streams re-encoded MPEG-TS", %{
+  test "transcode progressive stream.mp4 streams re-encoded fMP4", %{
     movie: movie,
     source: source,
     user: user
@@ -262,7 +262,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn =
       build_conn()
-      |> get(~p"/Videos/#{movie.id}/stream.ts", %{
+      |> get(~p"/Videos/#{movie.id}/stream.mp4", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
         "PlaySessionId" => session,
@@ -304,7 +304,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn =
       build_conn()
-      |> get(~p"/Videos/#{movie.id}/stream.ts", %{
+      |> get(~p"/Videos/#{movie.id}/stream.mp4", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
         "Static" => "false",
@@ -317,7 +317,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     Hivefin.Playback.Session.stop(hold)
   end
 
-  test "PlaybackInfo transcode uses progressive http URL not hls master", %{
+  test "PlaybackInfo transcode uses progressive fMP4 http URL not hls master", %{
     conn: conn,
     movie: movie
   } do
@@ -338,8 +338,8 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert %{"MediaSources" => [ms]} = json_response(conn, 200)
     assert ms["SupportsTranscoding"] == true
     assert ms["TranscodingSubProtocol"] == "http"
-    assert ms["TranscodingContainer"] == "ts"
-    assert ms["TranscodingUrl"] =~ "stream.ts"
+    assert ms["TranscodingContainer"] == "mp4"
+    assert ms["TranscodingUrl"] =~ "stream.mp4"
     assert ms["TranscodingUrl"] =~ "Transcode=true"
     refute ms["TranscodingUrl"] =~ "master.m3u8"
   end
@@ -370,8 +370,8 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["SupportsDirectPlay"] == false
     assert ms["SupportsDirectStream"] == true
     assert is_binary(ms["TranscodingUrl"])
-    assert ms["TranscodingUrl"] =~ "stream.ts"
-    assert ms["TranscodingContainer"] == "ts"
+    assert ms["TranscodingUrl"] =~ "stream.mp4"
+    assert ms["TranscodingContainer"] == "mp4"
     refute Map.has_key?(ms, "Path")
   end
 end

@@ -204,7 +204,7 @@ defmodule Hivefin.Playback.Session do
           File.mkdir_p!(temp_dir)
 
           height = Map.get(attrs, :height, default_height(mode))
-          format = Map.get(attrs, :format, "mpegts")
+          format = Map.get(attrs, :format, default_format(mode))
 
           state = %__MODULE__{
             id: id,
@@ -444,7 +444,7 @@ defmodule Hivefin.Playback.Session do
     args =
       Args.remux(state.input_path, %{
         output: "pipe:1",
-        format: "mpegts"
+        format: state.format || "mp4"
       })
 
     open_port(state, args)
@@ -478,7 +478,7 @@ defmodule Hivefin.Playback.Session do
       Args.transcode(state.input_path, %{
         encoder: state.encoder,
         output: "pipe:1",
-        format: "mpegts",
+        format: state.format || "mp4",
         height: state.height
       })
 
@@ -675,6 +675,11 @@ defmodule Hivefin.Playback.Session do
 
   defp default_height(:transcode), do: 720
   defp default_height(:remux), do: nil
+
+  # Progressive fragmented MP4 for HTML5 playback (not MPEG-TS).
+  defp default_format(:remux), do: "mp4"
+  defp default_format(:transcode), do: "mp4"
+  defp default_format(_), do: "mp4"
 
   defp allow_cpu_fallback_default do
     case Application.get_env(:hivefin, :allow_cpu_fallback, true) do

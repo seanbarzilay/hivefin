@@ -16,7 +16,7 @@ defmodule Hivefin.Playback.DecisionTest do
     profile = %{direct_play_containers: ["mp4"], video_codecs: ["h264"], audio_codecs: ["aac"]}
     assert {:direct_stream, meta} = Decision.choose(source, profile)
     assert meta.reason == :container_not_allowed
-    assert meta.remux_container == "ts"
+    assert meta.remux_container == "mp4"
   end
 
   test "unsupported video codec forces transcode" do

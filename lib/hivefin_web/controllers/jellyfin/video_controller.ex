@@ -45,7 +45,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   @doc """
   Legacy path kept for older clients. Progressive MPEG-TS transcode (not HLS).
 
-  Prefer `TranscodingUrl` from PlaybackInfo (`stream.ts?...&Transcode=true`).
+  Prefer `TranscodingUrl` from PlaybackInfo (`stream.mp4?...&Transcode=true`).
   Concurrent session limit exhausted → 503.
   """
   def master_m3u8(conn, %{"item_id" => path_id} = params) do
@@ -178,21 +178,21 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     attrs =
       case mode do
         :remux ->
-          %{id: session_id, mode: :remux, input_path: path}
+          %{id: session_id, mode: :remux, input_path: path, format: "mp4"}
 
         :transcode ->
           %{
             id: session_id,
             mode: :transcode,
             input_path: path,
-            format: "mpegts",
+            format: "mp4",
             height: height_from_params(params)
           }
       end
 
     case Supervisor.start_session(attrs) do
       {:ok, pid} ->
-        stream_pipe(conn, pid, "video/mp2t")
+        stream_pipe(conn, pid, "video/mp4")
 
       {:error, :busy} ->
         conn

@@ -25,17 +25,21 @@ defmodule Hivefin.Playback.FFmpeg.Args do
           optional(:hls_time) => pos_integer()
         }
 
+  # Fragmented MP4 is progressive-pipe friendly and playable in HTML5 <video>
+  # (Chrome/Firefox/Safari). Plain MPEG-TS is not.
+  @fmp4_movflags "frag_keyframe+empty_moov+default_base_moof"
+
   @doc """
   Builds args for container remux (stream copy, no re-encode).
 
   ## Options
   - `:output` — path or `"pipe:1"`
-  - `:format` — container format (default `"mpegts"`)
+  - `:format` — container format (default `"mp4"` fragmented progressive)
   """
   @spec remux(String.t(), remux_opts() | map()) :: [String.t()]
   def remux(input, opts) when is_binary(input) and is_map(opts) do
     output = Map.fetch!(opts, :output)
-    format = Map.get(opts, :format, "mpegts")
+    format = Map.get(opts, :format, "mp4")
 
     [
       "-hide_banner",
@@ -48,11 +52,8 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-map",
       "0:a:0?",
       "-c",
-      "copy",
-      "-f",
-      format,
-      output
-    ]
+      "copy"
+    ] ++ container_args(format, output)
   end
 
   @doc """
@@ -62,7 +63,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   - `:output` — path, `"pipe:1"`, or HLS playlist path
   - `:encoder` — `:libx264 | :videotoolbox | :nvenc | :vaapi`
   - `:height` — target height for scale filter (even width auto)
-  - `:format` — `"mpegts"` (default) or `"hls"`
+  - `:format` — `"mp4"` (default fragmented progressive), `"mpegts"`, or `"hls"`
   - `:hls_segment_pattern` — required when format is `"hls"`
   - `:hls_time` — segment duration seconds (default 2)
   - `:video_bitrate` — used by HW encoders (default `"4M"`)
@@ -72,7 +73,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   def transcode(input, opts) when is_binary(input) and is_map(opts) do
     output = Map.fetch!(opts, :output)
     encoder = Map.fetch!(opts, :encoder)
-    format = Map.get(opts, :format, "mpegts")
+    format = Map.get(opts, :format, "mp4")
     height = Map.get(opts, :height)
     video_bitrate = Map.get(opts, :video_bitrate, "4M")
     audio_bitrate = Map.get(opts, :audio_bitrate, "128k")
@@ -91,9 +92,10 @@ defmodule Hivefin.Playback.FFmpeg.Args do
 
     video = video_encode_args(encoder, video_bitrate)
     # VAAPI injects its own -vf chain; skip software scale on that path.
+    # Always force 8-bit yuv420p so NVENC/libx264 accept 10-bit HDR sources.
     scale = if encoder == :vaapi, do: [], else: scale_args(height)
     audio = ["-c:a", "aac", "-ac", "2", "-b:a", audio_bitrate]
-    out = output_args(format, output, opts)
+    out = container_args(format, output, opts)
 
     base ++ video ++ scale ++ audio ++ out
   end
@@ -124,16 +126,17 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     ]
   end
 
-  defp scale_args(nil), do: []
+  # Always convert to 8-bit 4:2:0 — required for h264_nvenc on 10-bit HEVC/HDR.
+  defp scale_args(nil), do: ["-vf", "format=yuv420p"]
 
   defp scale_args(height) when is_integer(height) and height > 0,
-    do: ["-vf", "scale=-2:#{height}"]
+    do: ["-vf", "scale=-2:#{height},format=yuv420p"]
 
-  # VAAPI already injects -vf; if height is also set, merge is left to caller.
-  # For v1 we only scale on non-vaapi paths when height present.
-  defp scale_args(_), do: []
+  defp scale_args(_), do: ["-vf", "format=yuv420p"]
 
-  defp output_args("hls", output, opts) do
+  defp container_args(format, output), do: container_args(format, output, %{})
+
+  defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)
     hls_time = Map.get(opts, :hls_time, 2)
 
@@ -152,7 +155,11 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     ]
   end
 
-  defp output_args(format, output, _opts) when is_binary(format) do
+  defp container_args(format, output, _opts) when format in ["mp4", "m4v", "mov"] do
+    ["-f", "mp4", "-movflags", @fmp4_movflags, output]
+  end
+
+  defp container_args(format, output, _opts) when is_binary(format) do
     ["-f", format, output]
   end
 end

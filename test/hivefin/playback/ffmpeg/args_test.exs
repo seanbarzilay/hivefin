@@ -4,7 +4,7 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
   alias Hivefin.Playback.FFmpeg.Args
 
   describe "remux/2" do
-    test "stream-copies to mpegts pipe" do
+    test "stream-copies to fragmented mp4 pipe by default" do
       args = Args.remux("/media/in.mkv", %{output: "pipe:1"})
 
       assert args == [
@@ -20,7 +20,9 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
                "-c",
                "copy",
                "-f",
-               "mpegts",
+               "mp4",
+               "-movflags",
+               "frag_keyframe+empty_moov+default_base_moof",
                "pipe:1"
              ]
     end
@@ -30,11 +32,12 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert Enum.at(args, -1) == "/tmp/out.ts"
       assert "-c" in args
       assert "copy" in args
+      assert "mpegts" in args
     end
   end
 
   describe "transcode/2" do
-    test "libx264 progressive with scale" do
+    test "libx264 progressive fMP4 with scale and yuv420p" do
       args =
         Args.transcode("/media/in.mkv", %{
           encoder: :libx264,
@@ -49,11 +52,12 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "-crf" in args
       assert "23" in args
       assert "-vf" in args
-      assert "scale=-2:720" in args
+      assert "scale=-2:720,format=yuv420p" in args
       assert "-c:a" in args
       assert "aac" in args
       assert "-f" in args
-      assert "mpegts" in args
+      assert "mp4" in args
+      assert "-movflags" in args
       assert Enum.at(args, -1) == "pipe:1"
       refute "h264_videotoolbox" in args
     end

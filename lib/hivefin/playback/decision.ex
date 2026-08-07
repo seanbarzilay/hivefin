@@ -59,7 +59,7 @@ defmodule Hivefin.Playback.Decision do
         {:direct_stream,
          %{
            reason: :container_not_allowed,
-           remux_container: "ts",
+           remux_container: "mp4",
            implemented: true,
            container: container,
            video_codec: video,

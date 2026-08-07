@@ -109,8 +109,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   end
 
   defp put_play_method(base, :direct_stream, item_id, source_id, token, session, meta) do
-    # Remux endpoint — runner in Task 8; URL is stable for clients.
-    container = Map.get(meta, :remux_container, "ts")
+    # Progressive fragmented MP4 remux — playable in HTML5 video elements.
+    container = Map.get(meta, :remux_container, "mp4")
     url = remux_url(item_id, source_id, token, session, container)
 
     Map.merge(base, %{
@@ -126,7 +126,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   end
 
   defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
-    # v1: progressive MPEG-TS over HTTP (honest contract — not multi-segment HLS).
+    # Progressive fragmented MP4 (H.264/AAC) over HTTP — not multi-segment HLS.
     url = transcode_url(item_id, source_id, token, session)
 
     Map.merge(base, %{
@@ -136,7 +136,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
       "TranscodingSubProtocol" => "http",
-      "TranscodingContainer" => "ts",
+      "TranscodingContainer" => "mp4",
       "IsRemote" => false
     })
   end
@@ -160,7 +160,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     item_id = Id.format(item_id)
     source_id = Id.format(source_id)
 
-    "/Videos/#{item_id}/stream.ts?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false&Transcode=true"
+    "/Videos/#{item_id}/stream.mp4?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false&Transcode=true"
   end
 
 
