@@ -9,7 +9,6 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   alias Hivefin.Library.{LibraryContext, MediaSource}
   alias Hivefin.Playback.{Session, StreamToken, Supervisor}
 
-
   @doc """
   Progressive DirectPlay (`Static=true`), FFmpeg remux (`Static=false`), or
   progressive transcode (`Static=false&Transcode=true`).
@@ -17,12 +16,16 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   Path `:item_id` may be either the **item** id or the **media source** id.
   jellyfin-vue builds `/Videos/{mediaSourceId}/stream.{container}?api_key={accessToken}`.
 
-  Auth via query `api_key` / `Tag` / `apiKey`:
-  - signed stream token (PlaybackInfo DirectStreamUrl), or
-  - user access token (jellyfin-vue direct stream convention)
+  Auth, in order:
+  - signed stream token in query `api_key` / `Tag` / `apiKey` (PlaybackInfo
+    DirectStreamUrl), or
+  - user access token in the same query params (jellyfin-vue convention), or
+  - user access token from the MediaBrowser `Authorization` /
+    `X-Emby-Authorization` / `X-Emby-Token` header (Android ExoPlayer, which
+    never puts the token in the URL)
   """
   def stream(conn, %{"item_id" => path_id} = params) do
-    case authorize_stream(path_id, params) do
+    case authorize_stream(conn, path_id, params) do
       {:ok, claims, path} ->
         conn = assign(conn, :stream_claims, claims)
 
@@ -50,7 +53,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   Concurrent session limit exhausted → 503.
   """
   def master_m3u8(conn, %{"item_id" => path_id} = params) do
-    case authorize_stream(path_id, params) do
+    case authorize_stream(conn, path_id, params) do
       {:ok, claims, path} ->
         conn = assign(conn, :stream_claims, claims)
         mode = if transcode_request?(params), do: :transcode, else: :remux
@@ -64,8 +67,11 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   @doc """
   Serves an HLS media segment produced by an active FFmpeg session.
   """
-  def hls_segment(conn, %{"item_id" => path_id, "session_id" => session_id, "file" => file} = params) do
-    case authorize_stream(path_id, params) do
+  def hls_segment(
+        conn,
+        %{"item_id" => path_id, "session_id" => session_id, "file" => file} = params
+      ) do
+    case authorize_stream(conn, path_id, params) do
       {:ok, _claims, _path} ->
         case Session.segment_path(session_id, file) do
           {:ok, segment} ->
@@ -110,10 +116,10 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     do: conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
 
   # Resolves path id (item OR media source) + token (stream token OR access token).
-  defp authorize_stream(path_id, params) do
-    token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
+  defp authorize_stream(conn, path_id, params) do
+    query_token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
 
-    case StreamToken.verify(token) do
+    case StreamToken.verify(query_token) do
       {:ok, claims} ->
         authorize_stream_token(path_id, params, claims)
 
@@ -121,7 +127,33 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         {:error, :expired}
 
       {:error, _} ->
-        authorize_access_token(path_id, params, token)
+        # Not a signed stream token. Android ExoPlayer deliberately keeps the
+        # token out of the URL ("we don't pass the access token in the URL",
+        # jellyfin-android AppModule) and sends `Authorization: MediaBrowser
+        # ... Token="..."` instead, so also accept header credentials — as
+        # real Jellyfin does on every endpoint.
+        [query_token, header_token(conn)]
+        |> Enum.filter(&(is_binary(&1) and &1 != ""))
+        |> Enum.uniq()
+        |> try_access_tokens(path_id, params)
+    end
+  end
+
+  defp try_access_tokens([], _path_id, _params), do: {:error, :unauthorized}
+
+  defp try_access_tokens(tokens, path_id, params) do
+    Enum.reduce_while(tokens, {:error, :unauthorized}, fn token, _last ->
+      case authorize_access_token(path_id, params, token) do
+        {:ok, _claims, _path} = ok -> {:halt, ok}
+        error -> {:cont, error}
+      end
+    end)
+  end
+
+  defp header_token(conn) do
+    case HivefinWeb.Plugs.JellyfinAuth.resolve_token(conn) do
+      {:ok, token} -> token
+      :error -> nil
     end
   end
 
@@ -191,8 +223,6 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         {:error, :unauthorized}
     end
   end
-
-
 
   defp stream_ffmpeg(conn, path, params, mode) when mode in [:remux, :transcode] do
     client_session_id = play_session_id(params)
@@ -620,13 +650,27 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   defp media_content_type(path) do
     case Path.extname(path) |> String.downcase() do
-      ".mkv" -> "video/x-matroska"
-      ".mp4" -> "video/mp4"
-      ".m4v" -> "video/mp4"
-      ".webm" -> "video/webm"
-      ".ts" -> "video/mp2t"
-      ".m2ts" -> "video/mp2t"
-      ".avi" -> "video/x-msvideo"
+      ".mkv" ->
+        "video/x-matroska"
+
+      ".mp4" ->
+        "video/mp4"
+
+      ".m4v" ->
+        "video/mp4"
+
+      ".webm" ->
+        "video/webm"
+
+      ".ts" ->
+        "video/mp2t"
+
+      ".m2ts" ->
+        "video/mp2t"
+
+      ".avi" ->
+        "video/x-msvideo"
+
       other ->
         case MIME.from_path(path) do
           "application/octet-stream" when other != "" -> "video/mp4"

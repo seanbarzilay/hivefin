@@ -16,8 +16,6 @@ defmodule HivefinWeb.Plugs.JellyfinAuth do
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    conn = fetch_query_params(conn)
-
     case resolve_token(conn) do
       {:ok, token} ->
         case Accounts.get_access_token(token) do
@@ -35,7 +33,16 @@ defmodule HivefinWeb.Plugs.JellyfinAuth do
     end
   end
 
-  defp resolve_token(conn) do
+  @doc """
+  Extracts a Jellyfin token from a request: MediaBrowser auth header, the
+  `X-Emby-Token` header, then the `api_key` query param.
+
+  Public so stream endpoints (which also accept signed stream tokens) resolve
+  credentials identically instead of reimplementing it.
+  """
+  def resolve_token(conn) do
+    conn = fetch_query_params(conn)
+
     case header_token(conn) do
       {:ok, _} = ok -> ok
       :error -> query_api_key(conn)
@@ -43,6 +50,16 @@ defmodule HivefinWeb.Plugs.JellyfinAuth do
   end
 
   defp header_token(conn) do
+    with :error <- media_browser_token(conn) do
+      # Jellyfin also accepts the raw token in X-Emby-Token.
+      case get_req_header(conn, "x-emby-token") do
+        [token | _] when is_binary(token) and token != "" -> {:ok, token}
+        _ -> :error
+      end
+    end
+  end
+
+  defp media_browser_token(conn) do
     with header when is_binary(header) <- first_auth_header(conn),
          {:ok, parsed} <- Auth.parse_authorization(header),
          token when is_binary(token) and token != "" <- parsed.token do

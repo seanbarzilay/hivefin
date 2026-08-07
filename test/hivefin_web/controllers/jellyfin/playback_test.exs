@@ -205,6 +205,56 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert byte_size(body) == 100
   end
 
+  # jellyfin-android's ResolvingDataSource injects `Authorization: MediaBrowser
+  # ... Token="..."` on every ExoPlayer request and deliberately keeps the token
+  # out of the URL, so a stream request carries no api_key at all. Rejecting it
+  # made ExoPlayer retry forever: empty player at 00:00.
+  for {label, header_name} <- [
+        {"MediaBrowser Authorization header", "authorization"},
+        {"X-Emby-Authorization header", "x-emby-authorization"}
+      ] do
+    test "GET stream authorizes via #{label} (no api_key in URL)", %{
+      movie: movie,
+      user: user
+    } do
+      {:ok, token, _} =
+        Hivefin.Accounts.issue_token(user, %{
+          device_id: "pixel",
+          device_name: "Pixel",
+          client: "Jellyfin for Android",
+          client_version: "2.6.3"
+        })
+
+      conn =
+        build_conn()
+        |> put_req_header(
+          unquote(header_name),
+          ~s(MediaBrowser Client="Jellyfin for Android", Device="Pixel", DeviceId="pixel", Version="2.6.3", Token="#{token}")
+        )
+        |> get(~p"/Videos/#{movie.id}/stream", %{"Static" => "true"})
+
+      assert conn.status == 200
+      assert byte_size(response(conn, 200)) == File.stat!(@fixture_mp4).size
+    end
+  end
+
+  test "GET stream authorizes via X-Emby-Token header", %{movie: movie, user: user} do
+    {:ok, token, _} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "tv",
+        device_name: "TV",
+        client: "Android TV",
+        client_version: "0.17.0"
+      })
+
+    conn =
+      build_conn()
+      |> put_req_header("x-emby-token", token)
+      |> get(~p"/Videos/#{movie.id}/stream", %{"Static" => "true"})
+
+    assert conn.status == 200
+  end
+
   test "GET stream rejects missing token", %{movie: movie, source: source} do
     conn =
       build_conn()
