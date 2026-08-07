@@ -211,8 +211,12 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert dto["PlayState"]["PositionTicks"] == 500
   end
 
-  test "supported_commands/0 lists the commands hivefin can actually deliver" do
-    assert SessionDto.supported_commands() == ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
+  # Pinned to [] on purpose: there is no command-delivery endpoint (Task 9
+  # unbuilt), and advertising a command with nothing behind it gives clients
+  # a control that silently does nothing when pressed. Do not populate this
+  # list before Task 9 lands delivery for whatever it lists.
+  test "supported_commands/0 is empty until Task 9 adds command delivery" do
+    assert SessionDto.supported_commands() == []
   end
 
   test "a session with no live socket is not controllable", %{access_token: at} do
@@ -223,13 +227,18 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert dto["SupportedCommands"] == []
   end
 
-  test "a controllable session advertises control support", %{access_token: at} do
+  test "a controllable session reports addressable but advertises no commands", %{
+    access_token: at
+  } do
     dto = SessionDto.from_access_token(at, controllable: true)
 
     assert dto["SupportsMediaControl"] == true
     assert dto["SupportsRemoteControl"] == true
     assert dto["Capabilities"]["SupportsMediaControl"] == true
-    assert "DisplayMessage" in dto["SupportedCommands"]
+    # No commands to advertise until Task 9 adds delivery — see
+    # supported_commands/0.
+    assert dto["SupportedCommands"] == []
+    assert dto["Capabilities"]["SupportedCommands"] == []
   end
 
   # Regression risk: the new :controllable option's map merge could clobber

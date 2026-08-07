@@ -24,13 +24,15 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   @doc "Required SessionInfoDto key names."
   def required_keys, do: Map.keys(@required)
 
-  # GeneralCommandType values hivefin can actually deliver. Advertising more
-  # than this gives clients a control that silently does nothing — there is
-  # no command-delivery endpoint at all yet (see Task 9).
-  @supported_commands ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
-
-  @doc "GeneralCommandType values hivefin can actually deliver."
-  def supported_commands, do: @supported_commands
+  # GeneralCommandType values hivefin can actually deliver: none, yet.
+  # Deliberately empty — there is no command-delivery endpoint at all (Task 9
+  # unbuilt). Jellyfin clients gate their control UI on this list, so
+  # advertising a command with nothing behind it produces a control that
+  # silently does nothing when pressed, a failure mode this project has
+  # already been bitten by. Intended set once Task 9 lands delivery:
+  # DisplayMessage, SetVolume, Mute, Unmute, ToggleMute. Populate then, not now.
+  @doc "GeneralCommandType values hivefin can actually deliver. Empty until Task 9 adds command delivery."
+  def supported_commands, do: []
 
   # Properties jellyfin-sdk-kotlin declares on PlayerStateInfo with no default
   # value — same MissingFieldException risk as @required above. Unlike
@@ -57,15 +59,16 @@ defmodule Hivefin.Jellyfin.Dto.Session do
 
   `opts[:controllable]` (default `false`) is whether this session holds a live
   socket right now. When true, `SupportsMediaControl`, `SupportsRemoteControl`,
-  and `Capabilities.SupportsMediaControl` report `true` and `SupportedCommands`
-  lists `supported_commands/0`.
+  and `Capabilities.SupportsMediaControl` report `true` — this session is
+  addressable, it has an open socket. `SupportedCommands` still lists
+  `supported_commands/0`, which is `[]` until Task 9 adds command delivery.
   """
   def from_access_token(%AccessToken{} = at, opts \\ []) do
     user = at.user
     last_activity = datetime(at.updated_at || at.inserted_at) || now()
     state = Keyword.get(opts, :state)
     controllable? = Keyword.get(opts, :controllable, false)
-    commands = if controllable?, do: @supported_commands, else: []
+    commands = if controllable?, do: supported_commands(), else: []
 
     %{
       "Id" => Hivefin.Jellyfin.Id.format(at.id),
