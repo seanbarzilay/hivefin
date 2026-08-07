@@ -174,6 +174,28 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     json(conn, BaseItem.query_result([], 0, start_index))
   end
 
+  @doc """
+  `GET /Items/:item_id/Intros` and `GET /Users/:user_id/Items/:item_id/Intros`.
+
+  jellyfin-web always requests intros before PlaybackInfo. A 404 aborts play with
+  "Unable to find a valid media source to play." Empty list = no preroll.
+  """
+  def intros(conn, _params) do
+    json(conn, BaseItem.query_result([], 0, 0))
+  end
+
+  @doc """
+  `GET /Items/:item_id/ThemeMedia` — theme songs/videos (empty is fine).
+  """
+  def theme_media(conn, %{"item_id" => item_id}) do
+    empty = BaseItem.query_result([], 0, 0)
+
+    json(conn, %{
+      "ThemeVideosResult" => Map.put(empty, "OwnerId", item_id),
+      "ThemeSongsResult" => Map.put(empty, "OwnerId", item_id),
+      "SoundtrackSongsResult" => Map.put(empty, "OwnerId", item_id)
+    })
+  end
 
   @doc """
   Jellyfin `GET /Shows/:series_id/Seasons` — seasons under a series.

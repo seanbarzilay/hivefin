@@ -37,6 +37,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "Type" => type_name(item.type),
       "MediaType" => media_type(item.type),
       "IsFolder" => folder?(item.type),
+      # jellyfin-web skips items without Full play access
+      "PlayAccess" => if(playable?, do: "Full", else: "None"),
+      "LocationType" => "FileSystem",
       "SortName" => item.sort_name || default_sort_name(item.name),
       "ProductionYear" => item.production_year,
       "PremiereDate" => premiere_date(item.premiere_date),

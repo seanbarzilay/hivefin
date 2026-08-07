@@ -70,9 +70,21 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
         _ -> []
       end
 
+    default_audio =
+      streams
+      |> Enum.find(fn s -> s.type == :audio and s.is_default end)
+      |> then(fn
+        nil -> Enum.find(streams, &(&1.type == :audio))
+        s -> s
+      end)
+
+    default_audio_index = if default_audio, do: default_audio.index, else: nil
+
     base = %{
       "Id" => Id.format(source.id),
       "ItemId" => Id.format(item.id),
+      "Name" => source.path && Path.basename(source.path),
+      "Path" => nil,
       "Container" => source.container,
       "Size" => source.size,
       "Bitrate" => source.bitrate,
@@ -80,6 +92,11 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "Type" => "Default",
       "Protocol" => "Http",
       "ReadAtNativeFramerate" => false,
+      "IgnoreDts" => false,
+      "IgnoreIndex" => false,
+      "GenPtsInput" => false,
+      "SupportsProbing" => true,
+      "DefaultAudioStreamIndex" => default_audio_index,
       "MediaStreams" => Enum.map(streams, &from_media_stream/1),
       "Formats" => [],
       "RequiredHttpHeaders" => %{}

@@ -27,6 +27,7 @@ defmodule HivefinWeb.Plugs.NormalizeJellyfinPath do
     ["useritems", "resume"] => ["UserItems", "Resume"],
     ["items"] => ["Items"],
     ["items", "latest"] => ["Items", "Latest"],
+    # Prefix rule also covers /items/:id/intros|thememedia|playbackinfo
     ["sessions"] => ["Sessions"],
     ["sessions", "capabilities"] => ["Sessions", "Capabilities"],
     ["sessions", "capabilities", "full"] => ["Sessions", "Capabilities", "Full"],

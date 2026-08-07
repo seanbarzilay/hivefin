@@ -174,6 +174,28 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     assert is_list(body)
   end
 
+  test "GET intros and theme media return empty success (not 404)", %{
+    conn: conn,
+    user: user,
+    movie: movie
+  } do
+    intros =
+      conn
+      |> get(~p"/Users/#{user.id}/Items/#{movie.id}/Intros")
+      |> json_response(200)
+
+    assert intros["Items"] == []
+    assert intros["TotalRecordCount"] == 0
+
+    theme =
+      conn
+      |> get(~p"/Items/#{movie.id}/ThemeMedia")
+      |> json_response(200)
+
+    assert theme["ThemeVideosResult"]["Items"] == []
+    assert theme["ThemeSongsResult"]["Items"] == []
+  end
+
   test "POST /DisplayPreferences/:id returns 204", %{conn: conn, user: user} do
     conn =
       post(conn, ~p"/DisplayPreferences/usersettings", %{

@@ -124,13 +124,18 @@ defmodule HivefinWeb.Router do
     # GET /Items before /Items/:id so list is not captured as show
     get "/Items", ItemsController, :index
     get "/Items/:item_id/Similar", ItemsController, :similar
+    get "/Items/:item_id/Intros", ItemsController, :intros
+    get "/Items/:item_id/ThemeMedia", ItemsController, :theme_media
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
+    get "/Items/:item_id/PlaybackInfo", PlaybackController, :create
     get "/Items/:item_id", ItemsController, :show
 
     # Latest/Resume before Items/:item_id so those names are not captured as ids
     get "/Users/:user_id/Items/Latest", ItemsController, :latest
     get "/Users/:user_id/Items/Resume", ItemsController, :resume
     get "/Users/:user_id/Items", ItemsController, :index
+    # Intros before show so "Intros" is never treated as an item id
+    get "/Users/:user_id/Items/:item_id/Intros", ItemsController, :intros
     get "/Users/:user_id/Items/:item_id", ItemsController, :show
     post "/Users/:user_id/Items/:item_id/UserData", SessionsController, :update_user_data
     post "/Users/:user_id/PlayedItems/:item_id", SessionsController, :mark_played
