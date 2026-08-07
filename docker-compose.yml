@@ -65,7 +65,7 @@ services:
       HIVEFIN_LOCAL_ADDRESS: ${HIVEFIN_LOCAL_ADDRESS:-http://localhost:4000}
       HIVEFIN_TMDB_API_KEY: ${HIVEFIN_TMDB_API_KEY:-}
       HIVEFIN_HW_ACCEL: ${HIVEFIN_HW_ACCEL:-auto}
-      HIVEFIN_MAX_TRANSCODES: ${HIVEFIN_MAX_TRANSCODES:-2}
+      HIVEFIN_MAX_TRANSCODES: ${HIVEFIN_MAX_TRANSCODES:-6}
       HIVEFIN_IMAGE_CACHE_DIR: /data/image-cache
       HIVEFIN_TRANSCODE_DIR: /data/transcode
       # Required for NVENC inside the container (with the devices block below).
