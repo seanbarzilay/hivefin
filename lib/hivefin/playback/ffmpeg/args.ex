@@ -66,10 +66,15 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       # Drop data/attachment/subtitle streams that break TS/fMP4 remux.
       "-dn",
       "-sn",
+      # Do NOT use -copyts: many rips start at pts≈minutes; browsers then show
+      # 00:00 forever or abort progressive fMP4 (start_time != 0).
       "-start_at_zero",
-      "-copyts",
       "-avoid_negative_ts",
-      "make_zero"
+      "make_zero",
+      "-muxdelay",
+      "0",
+      "-muxpreload",
+      "0"
     ] ++ container_args(format, output, opts)
   end
 

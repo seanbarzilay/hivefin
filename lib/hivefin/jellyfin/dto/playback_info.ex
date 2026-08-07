@@ -75,6 +75,18 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
          base_url
        ) do
     {method, meta} = Decision.choose(source, profile)
+
+    # Progressive HTML5: remuxed fMP4 from MKV is flaky (timestamps, codecs).
+    # Always re-encode to clean h264/aac fMP4 when not already DirectPlay-safe.
+    {method, meta} =
+      case {stream_format, method} do
+        {:progressive, :direct_stream} ->
+          {:transcode, Map.put(meta, :reason, :browser_progressive_transcode)}
+
+        _ ->
+          {method, meta}
+      end
+
     token = StreamToken.sign(user.id, item.id, source.id)
 
     streams =
