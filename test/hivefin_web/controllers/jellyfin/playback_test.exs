@@ -142,7 +142,6 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert json_response(conn, 401)
   end
 
-
   test "GET stream serves fixture mp4 with stream token", %{
     movie: movie,
     source: source,
@@ -322,7 +321,6 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     Hivefin.Playback.Session.stop(hold)
   end
 
-
   test "PlaybackInfo respects nested playbackInfoDto.DeviceProfile (SDK shape)", %{
     conn: conn,
     movie: movie
@@ -409,6 +407,13 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert is_binary(ms["TranscodingUrl"])
     # jellyfin-vue requires HLS for non-DirectPlay (always uses hls.js)
     assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingContainer"] == "ts"
+    assert ms["Container"] == "ts"
+    assert ms["Protocol"] == "File"
+    assert ms["DefaultAudioStreamIndex"] == 1
+    refute Map.get(ms, "StreamUrl")
+    assert Enum.any?(ms["MediaStreams"], &(&1["Codec"] == "h264" and &1["Type"] == "Video"))
+    assert Enum.any?(ms["MediaStreams"], &(&1["Codec"] == "aac" and &1["Type"] == "Audio"))
     assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Static=false"
     refute ms["TranscodingUrl"] =~ "Transcode=true"
@@ -437,7 +442,223 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["SupportsDirectStream"] == false
     assert ms["SupportsTranscoding"] == true
     assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingContainer"] == "ts"
     assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Transcode=true"
+  end
+
+  test "GET /Playback/BitrateTest returns octet-stream body", %{conn: conn} do
+    conn = get(conn, ~p"/Playback/BitrateTest?Size=1024")
+    assert response(conn, 200)
+    assert get_resp_header(conn, "content-type") |> hd() =~ "octet-stream"
+    assert byte_size(response(conn, 200)) == 1024
+  end
+
+  test "Jellyfin Web (browser_safe) forces HLS transcode without StreamUrl", %{
+    movie: movie,
+    source: source,
+    user: user
+  } do
+    # Make the source browser-unsafe (mkv/hevc) so browser_html5 forces transcode.
+    {:ok, source} =
+      source
+      |> Ecto.Changeset.change(%{container: "mkv"})
+      |> Hivefin.Repo.update()
+
+    source = Hivefin.Repo.preload(source, :media_streams, force: true)
+
+    for stream <- source.media_streams do
+      codec = if stream.type == :video, do: "hevc", else: stream.codec || "ac3"
+
+      stream
+      |> Ecto.Changeset.change(%{codec: codec})
+      |> Hivefin.Repo.update()
+    end
+
+    {:ok, token, _} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "web-1",
+        device_name: "Chrome",
+        client: "Jellyfin Web",
+        client_version: "10.9.0"
+      })
+
+    conn =
+      build_conn()
+      |> put_req_header(
+        "x-emby-authorization",
+        ~s(MediaBrowser Client="Jellyfin Web", Device="Android", DeviceId="web-1", Version="10.9.0", Token="#{token}")
+      )
+
+    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", %{})
+    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+    assert ms["SupportsDirectPlay"] == false
+    assert ms["SupportsTranscoding"] == true
+    assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingContainer"] == "ts"
+    assert ms["Container"] == "ts"
+    assert ms["TranscodingUrl"] =~ "master.m3u8"
+    assert ms["TranscodingUrl"] =~ "Transcode=true"
+    # StreamUrl must be absent — jellyfin-web short-circuits on it.
+    refute Map.has_key?(ms, "StreamUrl")
+    assert ms["RunTimeTicks"]
+    assert Enum.any?(ms["MediaStreams"], &(&1["Codec"] == "h264"))
+  end
+
+  test "Jellyfin for Android honors ExoPlayer DeviceProfile (DirectPlay MKV/HEVC)", %{
+    movie: movie,
+    source: source,
+    user: user
+  } do
+    # Source looks like 102 Dalmatians: mkv + hevc
+    {:ok, source} =
+      source
+      |> Ecto.Changeset.change(%{container: "mkv"})
+      |> Hivefin.Repo.update()
+
+    source = Hivefin.Repo.preload(source, :media_streams, force: true)
+
+    for stream <- source.media_streams do
+      codec = if stream.type == :video, do: "hevc", else: stream.codec || "ac3"
+
+      stream
+      |> Ecto.Changeset.change(%{codec: codec})
+      |> Hivefin.Repo.update()
+    end
+
+    {:ok, token, _} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "pixel",
+        device_name: "Pixel",
+        client: "Jellyfin for Android",
+        client_version: "2.6.3"
+      })
+
+    conn =
+      build_conn()
+      |> put_req_header(
+        "x-emby-authorization",
+        ~s(MediaBrowser Client="Jellyfin for Android", Device="Pixel", DeviceId="pixel", Version="2.6.3", Token="#{token}")
+      )
+
+    # Same shape as DeviceProfileBuilder transcoding + DirectPlay MKV/HEVC
+    body = %{
+      "DeviceProfile" => %{
+        "DirectPlayProfiles" => [
+          %{
+            "Container" => "mkv",
+            "Type" => "Video",
+            "VideoCodec" => "h264,hevc,mpeg4,vp9",
+            "AudioCodec" => "aac,mp3,ac3,eac3,flac,dts"
+          }
+        ],
+        "TranscodingProfiles" => [
+          %{
+            "Container" => "ts",
+            "Type" => "Video",
+            "VideoCodec" => "h264",
+            "AudioCodec" => "aac,mp3,ac3",
+            "Protocol" => "hls",
+            "Context" => "Streaming"
+          }
+        ]
+      }
+    }
+
+    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
+    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+    # Must DirectPlay — not force HTML5 browser_safe transcode
+    assert ms["SupportsDirectPlay"] == true
+    assert ms["Protocol"] == "File"
+    assert is_binary(ms["DirectStreamUrl"])
+    assert ms["DirectStreamUrl"] =~ "Static=true"
+    refute ms["TranscodingUrl"]
+  end
+
+  # Properties jellyfin-sdk-kotlin declares with NO default value, so
+  # kotlinx.serialization requires the key to be present. A missing one raises
+  # MissingFieldException: the Android app drops the MediaSource and never
+  # requests a stream (empty player, 00:00). jellyfin-web is JS and tolerates
+  # absence — that is why the browser played while the app hung.
+  # Listed literally (not read from SdkRequired) so shrinking that list fails here.
+  # Source: jellyfin-model/.../api/{MediaSourceInfo,MediaStream}.kt
+  @sdk_required_source ~w(
+    Protocol Type IsRemote ReadAtNativeFramerate IgnoreDts IgnoreIndex GenPtsInput
+    SupportsTranscoding SupportsDirectStream SupportsDirectPlay IsInfiniteStream
+    RequiresOpening RequiresClosing RequiresLooping SupportsProbing
+    TranscodingSubProtocol HasSegments
+  )
+
+  @sdk_required_stream ~w(
+    IsInterlaced IsDefault IsForced IsHearingImpaired IsOriginal Type Index
+    IsExternal IsTextSubtitleStream SupportsExternalStream
+  )
+
+  for {label, client} <- [
+        {"DirectPlay (Android/ExoPlayer)", "Jellyfin for Android"},
+        {"HLS transcode (browser_safe)", "Jellyfin Web"}
+      ] do
+    test "MediaSource carries every Kotlin-SDK-required field — #{label}", %{
+      movie: movie,
+      source: source,
+      user: user
+    } do
+      # mkv/hevc: DirectPlay for the ExoPlayer profile, forced HLS transcode for web.
+      {:ok, source} =
+        source |> Ecto.Changeset.change(%{container: "mkv"}) |> Hivefin.Repo.update()
+
+      source = Hivefin.Repo.preload(source, :media_streams, force: true)
+
+      for stream <- source.media_streams do
+        codec = if stream.type == :video, do: "hevc", else: stream.codec || "ac3"
+        stream |> Ecto.Changeset.change(%{codec: codec}) |> Hivefin.Repo.update()
+      end
+
+      {:ok, token, _} =
+        Hivefin.Accounts.issue_token(user, %{
+          device_id: "dev-1",
+          device_name: "Device",
+          client: unquote(client),
+          client_version: "1.0.0"
+        })
+
+      body =
+        if unquote(client) == "Jellyfin for Android" do
+          %{
+            "DeviceProfile" => %{
+              "DirectPlayProfiles" => [
+                %{"Container" => "mkv", "Type" => "Video", "VideoCodec" => "hevc"}
+              ]
+            }
+          }
+        else
+          %{}
+        end
+
+      conn =
+        build_conn()
+        |> put_req_header(
+          "x-emby-authorization",
+          ~s(MediaBrowser Client="#{unquote(client)}", Device="Device", DeviceId="dev-1", Version="1.0.0", Token="#{token}")
+        )
+        |> post(~p"/Items/#{movie.id}/PlaybackInfo", body)
+
+      assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+
+      for key <- @sdk_required_source do
+        assert Map.has_key?(ms, key), "MediaSourceInfo missing required key #{key}"
+        refute is_nil(ms[key]), "MediaSourceInfo required key #{key} is null"
+      end
+
+      # TranscodingSubProtocol is a non-null enum: only "http" or "hls".
+      assert ms["TranscodingSubProtocol"] in ["http", "hls"]
+
+      assert ms["MediaStreams"] != []
+
+      for stream <- ms["MediaStreams"], key <- @sdk_required_stream do
+        assert Map.has_key?(stream, key), "MediaStream #{stream["Index"]} missing #{key}"
+        refute is_nil(stream[key]), "MediaStream #{stream["Index"]} key #{key} is null"
+      end
+    end
   end
 end

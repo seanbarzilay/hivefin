@@ -5,12 +5,12 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   Absolute filesystem paths are never included in responses.
   """
 
+  alias Hivefin.Jellyfin.Dto.SdkRequired
   alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
   alias Hivefin.Jellyfin.Id
   alias Hivefin.Jellyfin.SystemInfo
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, UserData}
   alias Hivefin.Metadata.ImageCache
-
 
   @type field_opt :: String.t() | atom()
 
@@ -26,7 +26,12 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     fields = normalize_fields(Keyword.get(opts, :fields, []))
     user_data = Keyword.get(opts, :user_data)
     playable? = item.type in [:movie, :episode]
-    sources = if playable? or include_field?(fields, "MediaSources"), do: load_sources(item, opts), else: []
+
+    sources =
+      if playable? or include_field?(fields, "MediaSources"),
+        do: load_sources(item, opts),
+        else: []
+
     image_tags = ImageCache.image_tags_for(item)
 
     base = %{
@@ -63,8 +68,6 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     |> drop_nils()
   end
 
-
-
   @doc """
   Builds a BaseItemDto map for a library root (CollectionFolder / UserView).
   """
@@ -83,7 +86,6 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "UserData" => user_data(Keyword.get(opts, :user_data))
     }
   end
-
 
   @doc """
   Query result wrapper used by Items list endpoints.
@@ -132,13 +134,11 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     end
   end
 
-
   defp runtime_ticks_from_sources([%MediaSource{duration_ticks: ticks} | _])
        when is_integer(ticks) and ticks > 0,
        do: ticks
 
   defp runtime_ticks_from_sources(_), do: nil
-
 
   defp from_media_source(%MediaSource{} = source) do
     streams =
@@ -176,7 +176,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "RequiredHttpHeaders" => %{},
       "MediaStreams" => Enum.map(streams, &from_media_stream/1)
     }
-    |> drop_nils()
+    |> SdkRequired.source()
   end
 
   # Progressive DirectPlay in Chrome/Firefox/Safari <video> without hls.js.
@@ -201,8 +201,6 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     end
   end
 
-
-
   defp from_media_stream(%MediaStream{} = stream) do
     channel_layout = channel_layout(stream.channels)
 
@@ -222,14 +220,16 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       # jellyfin-vue MediaStreamSelector labels only use DisplayTitle
       "DisplayTitle" => display_title(stream, channel_layout)
     }
-    |> drop_nils()
+    |> SdkRequired.stream()
   end
 
   # Labels for client track pickers (matches Jellyfin-ish DisplayTitle shape).
   defp display_title(%MediaStream{type: :video} = stream, _layout) do
     res =
       cond do
-        is_integer(stream.height) and stream.height > 0 -> "#{stream.height}p"
+        is_integer(stream.height) and stream.height > 0 ->
+          "#{stream.height}p"
+
         is_integer(stream.width) and is_integer(stream.height) ->
           "#{stream.width}x#{stream.height}"
 
@@ -347,7 +347,6 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   defp media_type(:movie), do: "Video"
   defp media_type(:episode), do: "Video"
   defp media_type(_), do: nil
-
 
   defp stream_type_name(:video), do: "Video"
   defp stream_type_name(:audio), do: "Audio"

@@ -7,10 +7,10 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   """
 
   alias Hivefin.Accounts.User
+  alias Hivefin.Jellyfin.Dto.SdkRequired
   alias Hivefin.Jellyfin.Id
   alias Hivefin.Library.{Item, MediaSource, MediaStream}
   alias Hivefin.Playback.{Decision, DeviceProfile, StreamToken}
-
 
   @doc """
   Builds a PlaybackInfo response for an item with preloaded media sources.
@@ -19,8 +19,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   - `:device_profile` — normalized profile or raw Jellyfin DeviceProfile map
   - `:play_session_id` — optional; generated if omitted
   - `:browser_safe` — when true, ignore ExoPlayer MKV profiles; use HTML5-safe
-    DirectPlay rules and HLS for remux/transcode
-  - `:base_url` — public origin for absolute StreamUrl helpers
+    DirectPlay rules and force HLS re-encode (not stream-copy remux).
+  - `:base_url` — public origin for absolute Path on DirectPlay only
   """
   def build(%Item{} = item, %User{} = user, opts \\ []) do
     browser_safe? = Keyword.get(opts, :browser_safe, false)
@@ -73,8 +73,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
        ) do
     {method, meta} = Decision.choose(source, profile)
 
-    # HTML5/hls.js needs keyframe-aligned segments. Stream-copy remux of long-GOP
-    # H.264 MKV often downloads segs but never paints (stuck UI) in Android WebView.
+    # Stream-copy remux of long-GOP MKV often downloads segs but never paints in
+    # Android WebView. Force a full re-encode for browser-safe clients.
     {method, meta} =
       if browser_safe? and method in [:direct_stream, :transcode] do
         {:transcode, Map.put(meta, :reason, :browser_safe_transcode)}
@@ -104,33 +104,74 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     # Advertise MediaSource.Id == Item.Id (Jellyfin primary-source convention).
     item_id_fmt = Id.format(item.id)
 
+    # For remux/transcode, advertise the *output* streams (h264/aac at 0/1).
+    reencoded? = method in [:direct_stream, :transcode]
+    video = Enum.find(streams, &(&1.type == :video))
+
+    {container, media_streams, audio_index} =
+      if reencoded? do
+        # Android ExoPlayer DeviceProfile TranscodingProfile uses container "ts".
+        {"ts", output_media_streams(video), 1}
+      else
+        {source.container, Enum.map(streams, &from_media_stream/1), default_audio_index}
+      end
+
     base = %{
       "Id" => item_id_fmt,
       "ItemId" => item_id_fmt,
       "Name" => source.path && Path.basename(source.path),
       "Path" => nil,
-      "Container" => source.container,
+      "Container" => container,
       "Size" => source.size,
       "Bitrate" => source.bitrate,
       "RunTimeTicks" => source.duration_ticks,
-      "Type" => "Default",
-      "Protocol" => "Http",
-      "ReadAtNativeFramerate" => false,
-      "IgnoreDts" => false,
-      "IgnoreIndex" => false,
-      "GenPtsInput" => false,
-      "SupportsProbing" => true,
-      "DefaultAudioStreamIndex" => default_audio_index,
-      "MediaStreams" => Enum.map(streams, &from_media_stream/1),
+      # Protocol/Type and the required booleans come from SdkRequired.source/1.
+      # Protocol stays "File" (a local library file) so Android ExoPlayer takes the
+      # QueueManager FILE branch and builds getVideoStreamUrl(static=true).
+      "DefaultAudioStreamIndex" => audio_index,
+      # Explicit -1 so clients do not treat missing as index 0 (video).
+      "DefaultSubtitleStreamIndex" => -1,
+      "MediaStreams" => media_streams,
       "Formats" => [],
-      # Array so jellyfin-web `RequiredHttpHeaders.length` works (object has no length).
-      "RequiredHttpHeaders" => []
+      # Object, not array: the SDK types this Map<String, String?> and real Jellyfin
+      # returns {}. An array raises JsonDecodingException on Android.
+      "RequiredHttpHeaders" => %{}
     }
 
     base
     |> put_play_method(method, item.id, source.id, token, play_session_id, meta, base_url)
-    |> drop_nils()
+    |> SdkRequired.source()
   end
+
+  # Output of our remux/transcode pipeline: single video + stereo AAC audio.
+  defp output_media_streams(video) do
+    [
+      %{
+        "Index" => 0,
+        "Type" => "Video",
+        "Codec" => "h264",
+        "Width" => video && video.width,
+        "Height" => video && video.height,
+        "IsDefault" => true,
+        "DisplayTitle" => display_video_title(video)
+      }
+      |> SdkRequired.stream(),
+      %{
+        "Index" => 1,
+        "Type" => "Audio",
+        "Codec" => "aac",
+        "Channels" => 2,
+        "ChannelLayout" => "stereo",
+        "SampleRate" => 48_000,
+        "IsDefault" => true,
+        "DisplayTitle" => "AAC - Stereo"
+      }
+      |> SdkRequired.stream()
+    ]
+  end
+
+  defp display_video_title(%{height: h}) when is_integer(h) and h > 0, do: "h264 - #{h}p"
+  defp display_video_title(_), do: "h264"
 
   defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta, base_url) do
     rel = direct_stream_url(item_id, item_id, token, static: true)
@@ -141,38 +182,36 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "SupportsDirectStream" => true,
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => rel,
-      "StreamUrl" => absolutize(base_url, rel),
-      # Only set Path for true DirectPlay of browser-safe files.
+      # Absolute Path helps jellyfin-web <video> DirectPlay; Android ExoPlayer with
+      # Protocol=File builds its own Static=true stream URL and ignores Path.
       "Path" => absolutize(base_url, rel),
       "TranscodingUrl" => nil,
+      # nil is dropped; SdkRequired restores the non-null "http" enum value.
       "TranscodingSubProtocol" => nil,
-      "TranscodingContainer" => nil,
-      "IsRemote" => false
+      "TranscodingContainer" => nil
     })
   end
 
   defp put_play_method(base, method, item_id, source_id, token, session, _meta, base_url)
        when method in [:direct_stream, :transcode] do
     _ = source_id
-    # Always HLS for remux/transcode. Progressive fMP4 is aborted by browsers
-    # after ~1s (range probes / incomplete timeline) — broken pipe in FFmpeg.
+    _ = base_url
+    # HLS MPEG-TS — Android ExoPlayer DeviceProfile TranscodingProfile is
+    # container=ts, protocol=hls (QueueManager requires MediaStreamProtocol.HLS).
+    # Relative TranscodingUrl is resolved via apiClient.createUrl().
+    # Do NOT set StreamUrl (jellyfin-web short-circuits on it).
     rel = hls_url(item_id, item_id, token, session, transcode?: method == :transcode)
-    abs = absolutize(base_url, rel)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
       "SupportsDirectStream" => false,
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => nil,
-      # Do not put m3u8 in Path — DirectPlay Path is for progressive files only.
       "Path" => nil,
-      # Absolute StreamUrl for native Android ExoPlayer; relative TranscodingUrl
-      # for jellyfin-web getUrl() (which prefixes serverAddress).
-      "StreamUrl" => abs,
+      "StreamUrl" => nil,
       "TranscodingUrl" => rel,
       "TranscodingSubProtocol" => "hls",
-      "TranscodingContainer" => "ts",
-      "IsRemote" => false
+      "TranscodingContainer" => "ts"
     })
   end
 
@@ -201,6 +240,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
 
   defp absolutize(nil, path), do: path
   defp absolutize("", path), do: path
+
   defp absolutize(base, path) when is_binary(base) and is_binary(path) do
     if String.starts_with?(path, "http://") or String.starts_with?(path, "https://") do
       path
@@ -208,7 +248,6 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       base <> path
     end
   end
-
 
   defp from_media_stream(%MediaStream{} = stream) do
     %{
@@ -222,9 +261,10 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "BitRate" => stream.bit_rate,
       "IsDefault" => stream.is_default,
       "IsForced" => stream.is_forced,
+      "IsTextSubtitleStream" => stream.type == :subtitle,
       "Title" => stream.title
     }
-    |> drop_nils()
+    |> SdkRequired.stream()
   end
 
   defp stream_type_name(:video), do: "Video"
@@ -235,10 +275,4 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     do: other |> Atom.to_string() |> Macro.camelize()
 
   defp encode(value) when is_binary(value), do: URI.encode_www_form(value)
-
-  defp drop_nils(map) do
-    map
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-    |> Map.new()
-  end
 end

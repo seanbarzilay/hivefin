@@ -4,6 +4,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
   alias Hivefin.Jellyfin.Id
 
   alias Hivefin.Jellyfin.Dto.BaseItem
+  alias Hivefin.Jellyfin.Dto.SdkRequired
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream}
 
   test "maps movie item" do
@@ -36,7 +37,6 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     # Always present for playable types (empty when sources not preloaded)
     assert dto["MediaSources"] == []
   end
-
 
   test "ParentId prefers item parent over library for nested items" do
     library_id = Ecto.UUID.generate()
@@ -152,6 +152,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
       media_sources: [
         %MediaSource{
           id: source_id,
+          item_id: item_id,
           path: "/secret/media/movie.mkv",
           container: "mkv",
           size: 123,
@@ -176,7 +177,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     dto = BaseItem.from_item(item, fields: ["MediaSources"])
 
     assert [source] = dto["MediaSources"]
-    assert source["Id"] == Id.format(source_id)
+    # Jellyfin convention: the primary MediaSource.Id is the *item* id — clients
+    # resolve playback via getItem(mediaSource.Id) and a distinct source UUID 404s.
+    assert source["Id"] == Id.format(item_id)
     assert source["Container"] == "mkv"
     assert source["Size"] == 123
     assert source["RunTimeTicks"] == 50_000_000
@@ -191,6 +194,19 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert stream["Width"] == 1920
     # jellyfin-vue stream pickers only render DisplayTitle
     assert stream["DisplayTitle"] == "1080p H264 - Default"
+
+    # BaseItemDto.MediaSources is deserialized into the same strict Kotlin
+    # MediaSourceInfo/MediaStream models as PlaybackInfo, on every item fetch.
+    # A missing required field raises MissingFieldException client-side.
+    for key <- SdkRequired.source_keys() do
+      assert Map.has_key?(source, key), "MediaSourceInfo missing required key #{key}"
+      refute is_nil(source[key]), "MediaSourceInfo required key #{key} is null"
+    end
+
+    for key <- SdkRequired.stream_keys() do
+      assert Map.has_key?(stream, key), "MediaStream missing required key #{key}"
+      refute is_nil(stream[key]), "MediaStream required key #{key} is null"
+    end
   end
 
   test "mp4 h264/aac MediaSources mark browser DirectPlay true" do
