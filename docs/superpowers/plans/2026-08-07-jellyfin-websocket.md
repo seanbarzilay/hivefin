@@ -1341,6 +1341,53 @@ Append to `jellyfin_socket_test.exs`:
   end
 ```
 
+The test above stops at the registry. Add a second one that exercises the whole
+chain, because the registry is schemaless: a key-name disagreement between the
+writer (`record_session_state`) and the reader (`session_state/1`), or a
+`session_id` that was the formatted dashless id rather than the raw UUID, makes
+this entire stage inert with every test still green. Use `persisted_state/0`,
+create a real item with a media source, drive `put_state/2` **from a spawned
+process** (the path a controller takes), then assert the pushed payload:
+
+```elixir
+  test "now-playing state reaches a Sessions push end to end" do
+    s = persisted_state()
+    {:push, _, s} = JellyfinSocket.init(s)
+    item = insert_item_with_source()
+
+    test = self()
+
+    spawn(fn ->
+      Hivefin.Sessions.put_state(s.session_id, %{
+        item_id: item.id,
+        position_ticks: 500,
+        is_paused: false
+      })
+
+      send(test, :sent)
+    end)
+
+    assert_receive :sent
+    assert_receive {:jellyfin_session_state, attrs}
+    {:ok, s} = JellyfinSocket.handle_info({:jellyfin_session_state, attrs}, s)
+
+    {:push, {:text, json}, _} =
+      JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+    sessions = Jason.decode!(json)["Data"]
+    assert sessions != []
+    mine = Enum.find(sessions, &(&1["Id"] == Hivefin.Jellyfin.Id.format(s.session_id)))
+    assert mine, "own session missing from the push"
+    assert mine["PlayState"]["PositionTicks"] == 500
+    # RunTimeTicks proves :media_sources was preloaded — clients draw the
+    # progress bar from it, so nil here means a title with no progress.
+    refute is_nil(mine["NowPlayingItem"]["RunTimeTicks"])
+  end
+```
+
+`insert_item_with_source/0` is a local helper inserting an `Item` plus a
+`MediaSource` with a non-nil `duration_ticks`.
+
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `mix test test/hivefin/jellyfin/dto/session_test.exs test/hivefin_web/jellyfin_socket_test.exs`
@@ -1404,9 +1451,23 @@ with:
   defp now_playing_item(nil), do: nil
 
   defp now_playing_item(item_id) when is_binary(item_id) do
-    case Hivefin.Library.LibraryContext.get_item(item_id) do
-      nil -> nil
-      item -> Hivefin.Jellyfin.Dto.BaseItem.from_item(item)
+    # Coerce BEFORE casting. Clients send ids dashless, and Ecto.UUID.cast/1
+    # rejects that form outright — casting first would drop every real ItemId and
+    # silently emit no NowPlayingItem. Id.coerce/1 normalizes dashless to dashed;
+    # the cast then rejects genuine garbage, which matters because get_item raises
+    # ArgumentError on a non-UUID and this runs inside a socket's handle_info,
+    # where raising drops the client's connection.
+    # get_item_with_sources/1, not get_item/1 — without :media_sources preloaded
+    # BaseItem hits its NotLoaded guard and RunTimeTicks comes out nil, so
+    # clients render the now-playing title with no progress bar.
+    coerced = Hivefin.Jellyfin.Id.coerce(item_id)
+
+    with {:ok, _} <- Ecto.UUID.cast(coerced),
+         item when not is_nil(item) <-
+           Hivefin.Library.LibraryContext.get_item_with_sources(coerced) do
+      Hivefin.Jellyfin.Dto.BaseItem.from_item(item)
+    else
+      _ -> nil
     end
   end
 
@@ -1434,9 +1495,27 @@ The session id is the caller's access token id:
   end
 ```
 
+Normalize the params exactly as `report/3` already does further down the same
+module — reuse its private `parse_int/1` and `parse_bool/1`. Reading raw params
+here causes three separate bugs: an unparsed `"500"` or `500.0` raises a
+no-clause error in `play_state/2` *inside every subscribed socket's*
+`handle_info(:sessions_changed)`, killing observer connections in a reconnect
+loop; camelCase keys are silently ignored so now-playing never appears; and
+`!!params["IsPaused"]` is `true` for both `"false"` and `0`.
+
 Call it as:
-- in `playing/2`: `record_session_state(conn, %{item_id: params["ItemId"], position_ticks: params["PositionTicks"], is_paused: false})`
-- in `progress/2`: `record_session_state(conn, %{item_id: params["ItemId"], position_ticks: params["PositionTicks"], is_paused: !!params["IsPaused"]})`
+- in `playing/2`:
+
+```elixir
+      record_session_state(conn, %{
+        item_id: params["ItemId"] || params["itemId"] || params["item_id"],
+        position_ticks: parse_int(params["PositionTicks"] || params["positionTicks"]),
+        is_paused: false
+      })
+```
+
+- in `progress/2`: same, but with
+  `is_paused: parse_bool(params["IsPaused"] || params["isPaused"]) == true`
 - in `stopped/2`: `record_session_state(conn, %{item_id: nil, position_ticks: nil, is_paused: false})`
 
 Add `alias Hivefin.Sessions` at the top of the module.
