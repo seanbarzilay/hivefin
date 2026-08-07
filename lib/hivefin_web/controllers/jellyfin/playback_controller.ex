@@ -5,6 +5,9 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
   alias Hivefin.Library.LibraryContext
   alias Hivefin.Playback.DeviceProfile
 
+  # Cap BitrateTest payload so a misbehaving client cannot request huge blobs.
+  @bitrate_test_max_bytes 3_000_000
+
   @doc """
   `POST /Items/:item_id/PlaybackInfo` — returns MediaSources with stream URLs.
   """
@@ -35,16 +38,54 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
     end
   end
 
+  @doc """
+  `GET /Playback/BitrateTest` — jellyfin-web probes this before play to size
+  the adaptive bitrate. Returns a fixed-size binary (zeros).
+  """
+  def bitrate_test(conn, params) do
+    size =
+      case Integer.parse(to_string(params["Size"] || params["size"] || "500000")) do
+        {n, _} when n > 0 -> min(n, @bitrate_test_max_bytes)
+        _ -> 500_000
+      end
+
+    conn
+    |> put_resp_content_type("application/octet-stream", nil)
+    |> put_resp_header("cache-control", "no-cache, no-store")
+    |> send_resp(200, :binary.copy(<<0>>, size))
+  end
+
   # Phoenix merges JSON body into params; strip route keys for profile parse.
   defp params_body(params) do
     Map.drop(params, ["item_id", "id"])
   end
 
-  # jellyfin-web / Android WebView use HTML5 (+ hls.js). Ignore ExoPlayer MKV profiles.
-  # jellyfin-vue keeps the client DeviceProfile as-is.
+  # Only jellyfin-web (HTML5 / hls.js) needs browser_html5 DirectPlay rules.
+  # Official Android app Client is "Jellyfin for Android" and uses ExoPlayer with
+  # its own DeviceProfile (MKV/HEVC DirectPlay + HLS/TS transcode) — see
+  # jellyfin-android DeviceProfileBuilder + QueueManager.createVideoMediaSource.
   defp browser_safe_client?(conn) do
     client = client_name(conn)
-    not String.contains?(client, "vue")
+
+    cond do
+      client == "" -> false
+      String.contains?(client, "vue") -> false
+      # Native mobile / TV players
+      String.contains?(client, "android") -> false
+      String.contains?(client, "androidtv") -> false
+      String.contains?(client, "fire tv") -> false
+      String.contains?(client, "roku") -> false
+      String.contains?(client, "kodi") -> false
+      String.contains?(client, "infuse") -> false
+      String.contains?(client, "swiftfin") -> false
+      # Desktop / embedded jellyfin-web
+      String.contains?(client, "web") -> true
+      String.contains?(client, "chrome") -> true
+      String.contains?(client, "firefox") -> true
+      String.contains?(client, "safari") -> true
+      String.contains?(client, "edge") -> true
+      true -> false
+    end
   end
 
   defp client_name(conn) do

@@ -149,8 +149,28 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   end
 
   # Fixed GOP so -hls_time segments actually split near the target duration.
+  # main + no B-frames: max HTML5 / Android WebView MSE compatibility.
   defp video_encode_args(:libx264, _bitrate) do
-    ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", "96", "-keyint_min", "96", "-sc_threshold", "0"]
+    [
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "23",
+      "-profile:v",
+      "main",
+      "-level",
+      "4.0",
+      "-bf",
+      "0",
+      "-g",
+      "96",
+      "-keyint_min",
+      "96",
+      "-sc_threshold",
+      "0"
+    ]
   end
 
   defp video_encode_args(:videotoolbox, bitrate) do
@@ -251,6 +271,17 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)
     hls_time = Map.get(opts, :hls_time, 4)
+    # Default mpegts: Android ExoPlayer DeviceProfile TranscodingProfile is
+    # container=ts, protocol=hls. fMP4 is optional for browser MSE.
+    segment_type = Map.get(opts, :hls_segment_type, "mpegts")
+    init_filename = Map.get(opts, :hls_fmp4_init_filename, "init.mp4")
+
+    fmp4_init =
+      if segment_type == "fmp4" do
+        ["-hls_fmp4_init_filename", init_filename]
+      else
+        []
+      end
 
     [
       "-f",
@@ -266,10 +297,15 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "event",
       "-hls_flags",
       "independent_segments",
-      "-hls_segment_filename",
-      segment_pattern,
-      output
-    ]
+      "-hls_segment_type",
+      segment_type
+    ] ++
+      fmp4_init ++
+      [
+        "-hls_segment_filename",
+        segment_pattern,
+        output
+      ]
   end
 
   defp container_args(format, output, _opts) when format in ["mp4", "m4v", "mov"] do

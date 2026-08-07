@@ -502,13 +502,15 @@ defmodule Hivefin.Playback.Session do
 
   defp start_ffmpeg(%{mode: :remux, format: "hls"} = state) do
     playlist = Path.join(state.temp_dir, "index.m3u8")
+    # MPEG-TS — Android ExoPlayer DeviceProfile TranscodingProfile is container=ts.
     segment_pattern = Path.join(state.temp_dir, "seg_%03d.ts")
 
     args =
       Args.remux(state.input_path, %{
         output: playlist,
         format: "hls",
-        hls_segment_pattern: segment_pattern
+        hls_segment_pattern: segment_pattern,
+        hls_segment_type: "mpegts"
       })
 
     case open_port(state, args) do
@@ -533,6 +535,7 @@ defmodule Hivefin.Playback.Session do
 
   defp start_ffmpeg(%{mode: :transcode, format: "hls"} = state) do
     playlist = Path.join(state.temp_dir, "index.m3u8")
+    # MPEG-TS — matches Android ExoPlayer TranscodingProfile container=ts.
     segment_pattern = Path.join(state.temp_dir, "seg_%03d.ts")
 
     # h264_nvenc on this stack (Tesla P4 / FFmpeg 5.1) emits multi-minute PTS
@@ -546,6 +549,7 @@ defmodule Hivefin.Playback.Session do
         output: playlist,
         format: "hls",
         hls_segment_pattern: segment_pattern,
+        hls_segment_type: "mpegts",
         height: state.height
       })
 
@@ -762,8 +766,8 @@ defmodule Hivefin.Playback.Session do
   end
 
   defp safe_segment_name?(name) when is_binary(name) do
-    # FFmpeg hls_segment_filename pattern: seg_%03d.ts
-    Regex.match?(~r/^seg_\d{3,6}\.(ts|m4s)$/, name)
+    # fMP4 HLS: init.mp4 + seg_NNN.m4s; legacy TS still accepted.
+    name == "init.mp4" or Regex.match?(~r/^seg_\d{3,6}\.(ts|m4s)$/, name)
   end
 
   defp safe_segment_name?(_), do: false

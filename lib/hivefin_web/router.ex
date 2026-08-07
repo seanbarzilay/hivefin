@@ -134,6 +134,8 @@ defmodule HivefinWeb.Router do
     get "/Items/:item_id/ThemeMedia", ItemsController, :theme_media
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
     get "/Items/:item_id/PlaybackInfo", PlaybackController, :create
+    # jellyfin-web / Android shell bitrate probe before starting playback
+    get "/Playback/BitrateTest", PlaybackController, :bitrate_test
     get "/Items/:item_id", ItemsController, :show
 
     # Latest/Resume before Items/:item_id so those names are not captured as ids

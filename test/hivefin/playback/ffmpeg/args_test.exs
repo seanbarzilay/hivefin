@@ -39,7 +39,7 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
              ]
     end
 
-    test "remux to hls includes segment pattern" do
+    test "remux to hls defaults to mpegts (Android ExoPlayer)" do
       args =
         Args.remux("/in.mkv", %{
           output: "/tmp/index.m3u8",
@@ -50,6 +50,9 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "hls" in args
       assert "-hls_segment_filename" in args
       assert "/tmp/seg_%03d.ts" in args
+      assert "-hls_segment_type" in args
+      assert "mpegts" in args
+      refute "fmp4" in args
     end
 
     test "allows custom output path and format" do
@@ -76,6 +79,10 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "veryfast" in args
       assert "-crf" in args
       assert "23" in args
+      assert "-profile:v" in args
+      assert "main" in args
+      assert "-bf" in args
+      assert "0" in args
       assert "-vf" in args
       assert "-map_metadata" in args
       assert "-1" in args
@@ -126,7 +133,7 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "/dev/dri/renderD128" in args
     end
 
-    test "hls output includes segment pattern" do
+    test "hls output includes segment pattern and mpegts" do
       args =
         Args.transcode("/in.mp4", %{
           encoder: :libx264,
@@ -139,6 +146,7 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "hls" in args
       assert "-hls_segment_filename" in args
       assert "/tmp/session/seg_%03d.ts" in args
+      assert "mpegts" in args
       assert Enum.at(args, -1) == "/tmp/session/index.m3u8"
     end
 

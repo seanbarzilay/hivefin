@@ -311,9 +311,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
-  # Prefer two segments so hls.js has a next frag before the first ends
-  # (single-seg EVENT playlists often "finish" and restart on reload).
-  @hls_min_segments 2
+  # Prefer three segments so hls.js has buffer before the first ends
+  # (short EVENT playlists often stall after frag 0 on Android WebView).
+  @hls_min_segments 3
 
   # Wait until the session is ready and the playlist lists enough segments.
   defp await_hls_playlist(pid, timeout_ms) do
@@ -367,15 +367,15 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   defp rewrite_hls_playlist(body, session_id, token) when is_binary(body) do
     token_q = URI.encode_www_form(token)
-    seg_count = hls_segment_count(body)
+    hls_prefix = "hls/#{session_id}"
 
     rewritten =
       body
-      # Growing EVENT playlists are "live" in hls.js. EXT-X-START:0 is needed so
-      # the first load does not jump to the live edge — but if we keep injecting
-      # it on every master reload, hls.js re-seeks to 0 after each segment
-      # ("played first segment then reset to start").
-      |> adjust_hls_start_tag(seg_count)
+      # Never inject EXT-X-START — on Android WebView/hls.js it causes live-edge
+      # seeks / 00:00 stalls. With EVENT + enough initial segs, start at 0 is natural.
+      |> strip_hls_start_tag()
+      # fMP4 init segment referenced by EXT-X-MAP must be under our session path.
+      |> rewrite_hls_map_uri(hls_prefix, token_q)
       |> String.split("\n")
       |> Enum.map(fn line ->
         trimmed = String.trim(line)
@@ -384,10 +384,10 @@ defmodule HivefinWeb.Jellyfin.VideoController do
           trimmed == "" or String.starts_with?(trimmed, "#") ->
             line
 
-          Regex.match?(~r/^seg_\d+\.(ts|m4s)$/i, Path.basename(trimmed)) ->
+          Regex.match?(~r/^(seg_\d+\.(ts|m4s)|init\.mp4)$/i, Path.basename(trimmed)) ->
             name = Path.basename(trimmed)
             # Path-relative to /Videos/:id/master.m3u8 → /Videos/:id/hls/:session/:file
-            "hls/#{session_id}/#{name}?api_key=#{token_q}"
+            "#{hls_prefix}/#{name}?api_key=#{token_q}"
 
           true ->
             line
@@ -399,24 +399,13 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     if String.ends_with?(rewritten, "\n"), do: rewritten, else: rewritten <> "\n"
   end
 
-  # Keep START only while the playlist is still short (initial handoff).
-  # After that, strip it so playlist polls do not restart playback.
-  defp adjust_hls_start_tag(body, seg_count) when seg_count <= 2 do
-    body = strip_hls_start_tag(body)
-
-    if String.contains?(body, "#EXT-X-VERSION:") do
-      String.replace(
-        body,
-        ~r/(#EXT-X-VERSION:\d+\r?\n)/,
-        "\\1#EXT-X-START:TIME-OFFSET=0\n",
-        global: false
-      )
-    else
-      String.replace(body, "#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0", global: false)
-    end
+  # #EXT-X-MAP:URI="init.mp4" → URI="hls/<session>/init.mp4?api_key=..."
+  defp rewrite_hls_map_uri(body, hls_prefix, token_q) do
+    Regex.replace(~r/#EXT-X-MAP:URI="([^"]+)"/i, body, fn _full, uri ->
+      name = uri |> String.split("?") |> hd() |> Path.basename()
+      ~s(#EXT-X-MAP:URI="#{hls_prefix}/#{name}?api_key=#{token_q}")
+    end)
   end
-
-  defp adjust_hls_start_tag(body, _seg_count), do: strip_hls_start_tag(body)
 
   defp strip_hls_start_tag(body) do
     String.replace(body, ~r/#EXT-X-START:[^\r\n]*\r?\n/i, "")
@@ -424,7 +413,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   defp segment_content_type(file) do
     case Path.extname(file) |> String.downcase() do
-      ".m4s" -> "video/iso.segment"
+      # video/mp4 for both — some WebViews reject video/iso.segment for MSE.
+      ".m4s" -> "video/mp4"
+      ".mp4" -> "video/mp4"
       _ -> "video/mp2t"
     end
   end
