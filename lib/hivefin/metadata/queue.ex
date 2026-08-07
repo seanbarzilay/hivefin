@@ -27,6 +27,16 @@ defmodule Hivefin.Metadata.Queue do
     GenServer.cast(server, {:enqueue, item_id})
   end
 
+  @doc """
+  Snapshot of queue depth and in-flight workers (for admin / ops).
+  """
+  @spec status(GenServer.server()) :: %{queued: non_neg_integer(), busy: non_neg_integer(), max: pos_integer()}
+  def status(server \\ __MODULE__) do
+    GenServer.call(server, :status)
+  catch
+    :exit, _ -> %{queued: 0, busy: 0, max: @default_max}
+  end
+
   @impl true
   def init(opts) do
     max =
@@ -38,6 +48,8 @@ defmodule Hivefin.Metadata.Queue do
     {:ok,
      %{
        queue: :queue.new(),
+       # item_ids waiting or running — prevent stampede duplicates
+       pending: MapSet.new(),
        busy: 0,
        max: max,
        # ref => item_id
@@ -46,9 +58,23 @@ defmodule Hivefin.Metadata.Queue do
   end
 
   @impl true
+  def handle_call(:status, _from, state) do
+    {:reply, %{queued: :queue.len(state.queue), busy: state.busy, max: state.max}, state}
+  end
+
+  @impl true
   def handle_cast({:enqueue, item_id}, state) do
-    state = %{state | queue: :queue.in(item_id, state.queue)}
-    {:noreply, pump(state)}
+    if MapSet.member?(state.pending, item_id) do
+      {:noreply, state}
+    else
+      state = %{
+        state
+        | queue: :queue.in(item_id, state.queue),
+          pending: MapSet.put(state.pending, item_id)
+      }
+
+      {:noreply, pump(state)}
+    end
   end
 
   @impl true
@@ -71,9 +97,13 @@ defmodule Hivefin.Metadata.Queue do
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp finish_worker(state, ref) do
-    workers = Map.delete(state.workers, ref)
+    {item_id, workers} = Map.pop(state.workers, ref)
     busy = max(state.busy - 1, 0)
-    %{state | workers: workers, busy: busy}
+
+    pending =
+      if is_binary(item_id), do: MapSet.delete(state.pending, item_id), else: state.pending
+
+    %{state | workers: workers, busy: busy, pending: pending}
   end
 
   defp pump(%{busy: busy, max: max} = state) when busy >= max, do: state

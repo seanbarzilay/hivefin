@@ -51,13 +51,22 @@ defmodule Hivefin.Metadata.Matcher do
 
   defp search_and_pick(provider, name, year) do
     case provider.search_movie(name, year) do
+      # Year-filtered search is often empty when folder year is wrong; retry open.
+      {:ok, []} when not is_nil(year) ->
+        search_and_pick(provider, name, nil)
+
       {:ok, []} ->
         {:error, :no_match}
 
       {:ok, results} ->
         case pick_best(results, name, year) do
           nil ->
-            {:error, :no_match}
+            # One more try without year when year-scored results all failed.
+            if is_nil(year) do
+              {:error, :no_match}
+            else
+              search_and_pick(provider, name, nil)
+            end
 
           match ->
             # Prefer full details when available; fall back to search hit.
@@ -87,8 +96,9 @@ defmodule Hivefin.Metadata.Matcher do
     })
   end
 
-  # Minimum score to accept a search hit. Name exact match = 2, year exact = 2,
-  # year ±1 = 1. Score 0 (no name/year affinity) is always rejected.
+  # Minimum score to accept a search hit.
+  # Name: exact=3, containment=2, token-overlap≥60%=1
+  # Year: exact=2, ±1=1 (wrong year does not subtract — folder years are often off)
   @min_match_score 1
 
   defp pick_best(results, name, year) do
@@ -107,7 +117,7 @@ defmodule Hivefin.Metadata.Matcher do
   end
 
   defp score_result(r, normalized_name, year) do
-    name_score = if normalize_name(r.name) == normalized_name, do: 2, else: 0
+    name_score = name_affinity(normalized_name, normalize_name(r.name))
 
     year_score =
       cond do
@@ -120,9 +130,33 @@ defmodule Hivefin.Metadata.Matcher do
     name_score + year_score
   end
 
+  defp name_affinity("", _), do: 0
+  defp name_affinity(_, ""), do: 0
+
+  defp name_affinity(a, b) do
+    cond do
+      a == b -> 3
+      String.contains?(a, b) or String.contains?(b, a) -> 2
+      token_jaccard(a, b) >= 0.6 -> 1
+      true -> 0
+    end
+  end
+
+  defp token_jaccard(a, b) do
+    ta = a |> String.split() |> MapSet.new()
+    tb = b |> String.split() |> MapSet.new()
+
+    inter = MapSet.size(MapSet.intersection(ta, tb))
+    union = MapSet.size(MapSet.union(ta, tb))
+
+    if union == 0, do: 0.0, else: inter / union
+  end
+
   defp normalize_name(name) when is_binary(name) do
     name
     |> String.downcase()
+    # Drop common scene-release noise so "Movie.Name.2020.1080p" still matches.
+    |> String.replace(~r/\b(720p|1080p|2160p|4k|uhd|web-?dl|webrip|bluray|x264|x265|hevc|hdr|dv|proper|repack)\b/u, " ")
     |> String.replace(~r/[^a-z0-9]+/u, " ")
     |> String.trim()
   end

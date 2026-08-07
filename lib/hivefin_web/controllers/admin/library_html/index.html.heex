@@ -2,6 +2,9 @@
   <.page_header title="Libraries">
     Media roots scanned into the catalog
     <:actions>
+      <.form for={%{}} action={~p"/admin/libraries/refresh-metadata"} method="post">
+        <.button type="submit" variant="secondary">Refresh missing metadata</.button>
+      </.form>
       <.form for={%{}} action={~p"/admin/libraries/scan-all"} method="post">
         <.button type="submit" variant="secondary">Rescan all</.button>
       </.form>

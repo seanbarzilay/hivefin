@@ -2,6 +2,7 @@ defmodule HivefinWeb.Admin.LibraryController do
   use HivefinWeb, :controller
 
   alias Hivefin.Library.LibraryContext
+  alias Hivefin.Metadata.Worker, as: MetadataWorker
   alias Hivefin.Scanner
 
   def index(conn, _params) do
@@ -127,6 +128,21 @@ defmodule HivefinWeb.Admin.LibraryController do
 
     conn
     |> put_flash(if(errors > 0 and started == 0, do: :error, else: :info), msg)
+    |> redirect(to: ~p"/admin/libraries")
+  end
+
+  def refresh_metadata(conn, _params) do
+    count = MetadataWorker.enqueue_missing_movies()
+
+    msg =
+      if count == 0 do
+        "No movies missing metadata or posters."
+      else
+        "Queued #{count} movie(s) for TMDB metadata/poster refresh (runs in the background)."
+      end
+
+    conn
+    |> put_flash(:info, msg)
     |> redirect(to: ~p"/admin/libraries")
   end
 

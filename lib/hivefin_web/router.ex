@@ -51,6 +51,7 @@ defmodule HivefinWeb.Router do
     get "/libraries", LibraryController, :index
     post "/libraries", LibraryController, :create
     post "/libraries/scan-all", LibraryController, :scan_all
+    post "/libraries/refresh-metadata", LibraryController, :refresh_metadata
     get "/libraries/:id/edit", LibraryController, :edit
     put "/libraries/:id", LibraryController, :update
     post "/libraries/:id/scan", LibraryController, :scan

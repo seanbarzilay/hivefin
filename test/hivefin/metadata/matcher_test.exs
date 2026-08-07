@@ -86,6 +86,91 @@ defmodule Hivefin.Metadata.MatcherTest do
     assert {:error, :no_match} = Matcher.match_movie(item)
   end
 
+  test "match_movie accepts fuzzy token overlap with year", %{library: library} do
+    {:ok, item, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{
+        name: "Inception Movie",
+        production_year: 2010
+      })
+
+    Req.Test.stub(TMDB, fn conn ->
+      path = conn.request_path || ""
+
+      cond do
+        String.ends_with?(path, "/search/movie") ->
+          Req.Test.json(conn, %{
+            "results" => [
+              %{
+                "id" => 27205,
+                "title" => "Inception",
+                "overview" => "dreams",
+                "release_date" => "2010-07-16",
+                "poster_path" => "/p.jpg",
+                "backdrop_path" => nil
+              }
+            ]
+          })
+
+        String.contains?(path, "/movie/27205") ->
+          Req.Test.json(conn, %{
+            "id" => 27205,
+            "title" => "Inception",
+            "overview" => "dreams",
+            "release_date" => "2010-07-16",
+            "poster_path" => "/p.jpg",
+            "backdrop_path" => nil
+          })
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
+    assert {:ok, match} = Matcher.match_movie(item)
+    assert match.tmdb_id == 27205
+  end
+
+  test "match_movie retries without year when year filter is empty", %{item: item} do
+    Req.Test.stub(TMDB, fn conn ->
+      path = conn.request_path || ""
+
+      cond do
+        String.ends_with?(path, "/search/movie") and Map.has_key?(conn.query_params, "year") ->
+          Req.Test.json(conn, %{"results" => []})
+
+        String.ends_with?(path, "/search/movie") ->
+          Req.Test.json(conn, %{
+            "results" => [
+              %{
+                "id" => 27205,
+                "title" => "Inception",
+                "overview" => "dreams",
+                "release_date" => "2010-07-16",
+                "poster_path" => "/p.jpg",
+                "backdrop_path" => nil
+              }
+            ]
+          })
+
+        String.contains?(path, "/movie/27205") ->
+          Req.Test.json(conn, %{
+            "id" => 27205,
+            "title" => "Inception",
+            "overview" => "dreams",
+            "release_date" => "2010-07-16",
+            "poster_path" => "/p.jpg",
+            "backdrop_path" => nil
+          })
+
+        true ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
+      end
+    end)
+
+    assert {:ok, match} = Matcher.match_movie(item)
+    assert match.tmdb_id == 27205
+  end
+
   test "match_movie prefers existing provider id", %{item: item} do
     {:ok, item} =
       item

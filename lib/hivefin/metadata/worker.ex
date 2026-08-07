@@ -70,6 +70,52 @@ defmodule Hivefin.Metadata.Worker do
 
   def enqueue_refresh(_), do: :ok
 
+  @doc """
+  Enqueues metadata refresh for movies that lack a TMDB id and/or a primary
+  poster. Returns the number of item ids queued.
+
+  Safe to call repeatedly; the queue dedupes ids already pending/running.
+  """
+  @spec enqueue_missing_movies(keyword()) :: non_neg_integer()
+  def enqueue_missing_movies(opts \\ []) do
+    limit = Keyword.get(opts, :limit)
+
+    ids = list_missing_movie_ids(limit)
+    Enum.each(ids, &enqueue_refresh/1)
+    length(ids)
+  end
+
+  @doc """
+  Movie ids missing provider metadata and/or a primary image row.
+  """
+  @spec list_missing_movie_ids(pos_integer() | nil) :: [Ecto.UUID.t()]
+  def list_missing_movie_ids(limit \\ nil) do
+    import Ecto.Query
+
+    alias Hivefin.Library.Image
+
+    q =
+      from(i in Item,
+        as: :item,
+        left_join: img in Image,
+        on: img.item_id == i.id and img.type == :primary,
+        where: i.type == :movie,
+        where:
+          is_nil(img.id) or is_nil(i.provider_ids) or
+            fragment("coalesce(?::text, '{}') IN ('{}', 'null')", i.provider_ids),
+        select: i.id,
+        order_by: [asc: i.name]
+      )
+
+    q =
+      case limit do
+        n when is_integer(n) and n > 0 -> limit(q, ^n)
+        _ -> q
+      end
+
+    Repo.all(q)
+  end
+
   defp do_refresh_movie(item) do
     case Matcher.match_movie(item) do
       {:ok, match} ->
