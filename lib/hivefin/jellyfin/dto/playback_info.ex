@@ -153,14 +153,6 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     "/Videos/#{path_id}/stream?MediaSourceId=#{encode(source_id)}&Static=#{static}&api_key=#{encode(token)}"
   end
 
-  defp progressive_url(item_id, source_id, token, session, opts) do
-    item_id = Id.format(item_id)
-    source_id = Id.format(source_id)
-    transcode = if Keyword.get(opts, :transcode, false), do: "&Transcode=true", else: ""
-
-    "/Videos/#{item_id}/stream.mp4?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
-  end
-
   defp hls_url(item_id, source_id, token, session, opts) do
     item_id = Id.format(item_id)
     source_id = Id.format(source_id)

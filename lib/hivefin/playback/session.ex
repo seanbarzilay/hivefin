@@ -295,7 +295,10 @@ defmodule Hivefin.Playback.Session do
   end
 
   def handle_call(:keepalive, _from, state) do
-    {:reply, :ok, touch(state)}
+    # Reset idle deadline on playlist/segment hits so active HLS stays alive,
+    # but still times out after abandon (see :idle_timeout).
+    state = %{state | last_activity_ms: now_ms()}
+    {:reply, :ok, schedule_idle(state)}
   end
 
   def handle_call({:segment_path, filename}, _from, state) do
@@ -434,18 +437,17 @@ defmodule Hivefin.Playback.Session do
   end
 
   def handle_info(:idle_timeout, state) do
-    cond do
-      # HLS: FFmpeg may run far ahead of playback; keep the session (and temp
-      # segments) while the encoder is still alive even with no HTTP consumers.
-      hls_encoding?(state) ->
-        {:noreply, arm_idle(%{state | idle_timer: nil})}
+    # Always reclaim capacity when the client stops hitting playlist/segments
+    # (or progressive consumers leave). Do not keep FFmpeg running for the full
+    # file encode after abandon — that filled max_transcodes and caused 503s.
+    if map_size(state.consumers) == 0 and state.waiters == [] do
+      Logger.info(
+        "Playback session #{state.id} idle timeout; stopping mode=#{state.mode} format=#{state.format}"
+      )
 
-      map_size(state.consumers) == 0 and state.waiters == [] ->
-        Logger.debug("Playback session #{state.id} idle timeout; stopping")
-        {:stop, :normal, %{state | idle_timer: nil}}
-
-      true ->
-        {:noreply, schedule_idle(%{state | idle_timer: nil})}
+      {:stop, :normal, %{state | idle_timer: nil}}
+    else
+      {:noreply, schedule_idle(%{state | idle_timer: nil})}
     end
   end
 
@@ -817,20 +819,11 @@ defmodule Hivefin.Playback.Session do
       map_size(state.consumers) > 0 or state.waiters != [] ->
         cancel_idle(state)
 
-      hls_encoding?(state) ->
-        # Keep HLS producer sessions around; re-arm a long idle check.
-        cancel_idle(state) |> arm_idle()
-
       true ->
         # Unattended: leave an existing idle timer alone; arm only if missing.
         arm_idle(state)
     end
   end
-
-  defp hls_encoding?(%{format: "hls", status: :running, port: port}) when not is_nil(port),
-    do: true
-
-  defp hls_encoding?(_), do: false
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 end

@@ -269,31 +269,19 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
     case Supervisor.start_session(attrs) do
       {:ok, pid} ->
-        case Session.await_ready(pid, 30_000) do
-          {:ok, :hls} ->
-            info = Session.info(pid)
-            playlist_path = info.playlist_path
+        case await_hls_playlist(pid, 30_000) do
+          {:ok, body} ->
+            _ = Session.keepalive(pid)
+            token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
+            # Relative to master.m3u8 so hls.js resolves against the API host,
+            # not the jellyfin-vue page origin (different port → 404).
+            rewritten = rewrite_hls_playlist(body, session_id, token)
 
-            case File.read(playlist_path) do
-              {:ok, body} ->
-                token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
-                # Relative to master.m3u8 so hls.js resolves against the API host,
-                # not the jellyfin-vue page origin (different port → 404).
-                rewritten = rewrite_hls_playlist(body, session_id, token)
-
-                conn
-                |> put_resp_content_type("application/vnd.apple.mpegurl", nil)
-                |> put_resp_header("cache-control", "no-cache")
-                |> put_resp_header("access-control-expose-headers", "content-type")
-                |> send_resp(200, rewritten)
-
-              {:error, reason} ->
-                Logger.warning("hls playlist read failed: #{inspect(reason)}")
-                conn |> put_status(:internal_server_error) |> json(%{"error" => "playlist_missing"})
-            end
-
-          {:ok, _} ->
-            conn |> put_status(:internal_server_error) |> json(%{"error" => "not_hls"})
+            conn
+            |> put_resp_content_type("application/vnd.apple.mpegurl", nil)
+            |> put_resp_header("cache-control", "no-cache")
+            |> put_resp_header("access-control-expose-headers", "content-type")
+            |> send_resp(200, rewritten)
 
           {:error, :timeout} ->
             conn |> put_status(:gateway_timeout) |> json(%{"error" => "session_timeout"})
@@ -312,6 +300,56 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         Logger.warning("hls #{mode} session failed: #{inspect(reason)}")
         conn |> put_status(:internal_server_error) |> json(%{"error" => "hls_failed"})
     end
+  end
+
+  # Wait until the session is ready and the playlist lists at least one segment.
+  defp await_hls_playlist(pid, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    case Session.await_ready(pid, timeout_ms) do
+      {:ok, :hls} ->
+        poll_playlist_body(pid, deadline)
+
+      {:ok, other} ->
+        {:error, {:not_hls, other}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp poll_playlist_body(pid, deadline) do
+    now = System.monotonic_time(:millisecond)
+
+    if now >= deadline do
+      {:error, :timeout}
+    else
+      info = Session.info(pid)
+      path = info.playlist_path
+
+      case is_binary(path) && File.read(path) do
+        {:ok, body} ->
+          if hls_segment_count(body) >= 1 do
+            {:ok, body}
+          else
+            Process.sleep(150)
+            poll_playlist_body(pid, deadline)
+          end
+
+        _ ->
+          Process.sleep(150)
+          poll_playlist_body(pid, deadline)
+      end
+    end
+  end
+
+  defp hls_segment_count(body) when is_binary(body) do
+    body
+    |> String.split("\n")
+    |> Enum.count(fn line ->
+      t = String.trim(line)
+      t != "" and not String.starts_with?(t, "#")
+    end)
   end
 
   defp rewrite_hls_playlist(body, session_id, token) when is_binary(body) do

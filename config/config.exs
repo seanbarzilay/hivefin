@@ -13,9 +13,12 @@ config :hivefin,
   ffprobe_path: System.find_executable("ffprobe") || "ffprobe",
   ffmpeg_path: System.find_executable("ffmpeg") || "ffmpeg",
   hw_accel: :auto,
-  max_transcodes: 2,
+  # Concurrent FFmpeg remux/transcode/HLS sessions (each play can hold one).
+  max_transcodes: 6,
   allow_cpu_fallback: true,
-  session_idle_ms: 60_000,
+  # Abandon progressive/HLS sessions after this long without consumers or
+  # playlist/segment keepalive hits.
+  session_idle_ms: 90_000,
   transcode_dir: Path.join(System.tmp_dir!(), "hivefin-transcode"),
   image_cache_dir: Path.join(System.tmp_dir!(), "hivefin-image-cache"),
   tmdb_api_key: nil,
