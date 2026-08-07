@@ -117,6 +117,9 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     # setpts/asetpts force a timeline from 0 — source files often start at
     # non-zero PTS which breaks hls.js after a few segments.
     filters = if encoder == :vaapi, do: [], else: video_filter_args(height)
+    # Force IDR every ~4s so HLS segments start on keyframes.
+    gop = ["-force_key_frames", "expr:gte(t,n_forced*4)"]
+
     audio = [
       "-c:a",
       "aac",
@@ -126,14 +129,15 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "48000",
       "-b:a",
       audio_bitrate,
+      # N/SR rebuilds a clean audio timeline (PTS-STARTPTS fails on some DV/HDR rips).
       "-af",
-      "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
+      "aresample=async=1:first_pts=0,asetpts=N/SR/TB"
     ]
 
     ts_fix = ["-avoid_negative_ts", "make_zero", "-muxdelay", "0", "-muxpreload", "0"]
     out = container_args(format, output, opts)
 
-    base ++ video ++ filters ++ audio ++ ts_fix ++ out
+    base ++ video ++ gop ++ filters ++ audio ++ ts_fix ++ out
   end
 
   # Fixed GOP so -hls_time segments actually split near the target duration.
@@ -155,7 +159,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "-vaapi_device",
       "/dev/dri/renderD128",
       "-vf",
-      "setpts=PTS-STARTPTS,format=nv12,hwupload",
+      "setpts=N/(FRAME_RATE*TB),format=nv12,hwupload",
       "-c:v",
       "h264_vaapi",
       "-b:v",
@@ -164,15 +168,16 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   end
 
   # Always convert to 8-bit 4:2:0 — required for h264_nvenc on 10-bit HEVC/HDR.
-  # setpts resets timeline so segments start near t=0 for hls.js.
+  # N-based setpts rebuilds timeline from 0 (PTS-STARTPTS leaves large offsets on
+  # some Dolby Vision / HDR sources and stalls hls.js after a few segments).
   defp video_filter_args(nil),
-    do: ["-vf", "setpts=PTS-STARTPTS,format=yuv420p"]
+    do: ["-vf", "setpts=N/(FRAME_RATE*TB),format=yuv420p"]
 
   defp video_filter_args(height) when is_integer(height) and height > 0,
-    do: ["-vf", "setpts=PTS-STARTPTS,scale=-2:#{height},format=yuv420p"]
+    do: ["-vf", "scale=-2:#{height},format=yuv420p,setpts=N/(FRAME_RATE*TB)"]
 
   defp video_filter_args(_),
-    do: ["-vf", "setpts=PTS-STARTPTS,format=yuv420p"]
+    do: ["-vf", "setpts=N/(FRAME_RATE*TB),format=yuv420p"]
 
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)

@@ -74,11 +74,12 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "-crf" in args
       assert "23" in args
       assert "-vf" in args
-      assert "setpts=PTS-STARTPTS,scale=-2:720,format=yuv420p" in args
+      assert "scale=-2:720,format=yuv420p,setpts=N/(FRAME_RATE*TB)" in args
       assert "-c:a" in args
       assert "aac" in args
       assert "-af" in args
-      assert "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS" in args
+      assert "aresample=async=1:first_pts=0,asetpts=N/SR/TB" in args
+      assert "-force_key_frames" in args
       assert "-f" in args
       assert "mp4" in args
       assert "-movflags" in args
