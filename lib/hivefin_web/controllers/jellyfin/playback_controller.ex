@@ -63,9 +63,25 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
   end
 
   defp request_base_url(conn) do
-    scheme = Atom.to_string(conn.scheme)
+    # Prefer the Host the client used; fall back to configured LAN address when
+    # the request arrives as loopback (docker health checks / local curl).
     host = conn.host
-    port = conn.port
+
+    if host in ["127.0.0.1", "localhost", "0.0.0.0", "::1"] do
+      case Application.get_env(:hivefin, :local_address) do
+        url when is_binary(url) and url != "" ->
+          url |> String.trim() |> String.trim_trailing("/")
+
+        _ ->
+          build_base_url(conn.scheme, host, conn.port)
+      end
+    else
+      build_base_url(conn.scheme, host, conn.port)
+    end
+  end
+
+  defp build_base_url(scheme, host, port) do
+    scheme = to_string(scheme)
 
     default_port? =
       (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
