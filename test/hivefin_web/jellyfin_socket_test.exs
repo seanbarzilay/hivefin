@@ -14,6 +14,35 @@ defmodule HivefinWeb.JellyfinSocketTest do
 
   defp frame(map), do: {Jason.encode!(map), [opcode: :text]}
 
+  defp create_movie_with_source! do
+    n = System.unique_integer([:positive])
+
+    {:ok, library} =
+      Hivefin.Library.LibraryContext.create_library(%{
+        name: "Sock Movies #{n}",
+        type: :movies,
+        path: Path.expand("test/support/fixtures/media_tree/movies", File.cwd!())
+      })
+
+    {:ok, movie, :created} =
+      Hivefin.Library.LibraryContext.find_or_create_movie(library.id, %{
+        name: "Big Buck Bunny",
+        production_year: 2008
+      })
+
+    {:ok, _} =
+      %Hivefin.Library.MediaSource{}
+      |> Hivefin.Library.MediaSource.changeset(%{
+        path: Path.join(System.tmp_dir!(), "hivefin-sock-#{movie.id}.mp4"),
+        container: "mp4",
+        duration_ticks: 60_000_000,
+        item_id: movie.id
+      })
+      |> Hivefin.Repo.insert()
+
+    movie
+  end
+
   defp persisted_state do
     n = System.unique_integer([:positive])
 
@@ -196,6 +225,46 @@ defmodule HivefinWeb.JellyfinSocketTest do
       entry = Enum.find(Hivefin.Sessions.list(), &(&1.session_id == s.session_id))
       assert entry.position_ticks == 999
       assert entry.is_paused == true
+    end
+
+    # Important 3: exercises the real wiring end to end — the registry write
+    # via put_state/2 sent from another process (as a controller would), the
+    # live[at.id] join in sessions_message/1, and the NowPlayingItem lookup —
+    # rather than stopping at the registry as the previous test did.
+    test "put_state/2 from another process flows through to the Sessions push" do
+      movie = create_movie_with_source!()
+
+      s = persisted_state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      # A controller runs in a request process, not the socket process — send
+      # from a spawned task so this exercises the cross-process message path
+      # put_state/2 actually uses, not a same-process shortcut.
+      Task.async(fn ->
+        Hivefin.Sessions.put_state(s.session_id, %{
+          item_id: Hivefin.Jellyfin.Id.format(movie.id),
+          position_ticks: 500,
+          is_paused: false
+        })
+      end)
+      |> Task.await()
+
+      assert_receive {:jellyfin_session_state, attrs}
+      assert {:ok, s} = JellyfinSocket.handle_info({:jellyfin_session_state, attrs}, s)
+
+      {:push, {:text, json}, _} =
+        JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+      sessions = Jason.decode!(json)["Data"]
+      assert sessions != [], "expected at least one session in the Sessions push"
+
+      session = Enum.find(sessions, &(&1["Id"] == Hivefin.Jellyfin.Id.format(s.session_id)))
+      assert session, "expected a session entry for #{s.session_id}"
+
+      assert session["PlayState"]["PositionTicks"] == 500
+      assert session["PlayState"]["IsPaused"] == false
+      refute is_nil(session["NowPlayingItem"])
+      refute is_nil(session["NowPlayingItem"]["RunTimeTicks"])
     end
   end
 end

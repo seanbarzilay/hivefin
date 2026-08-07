@@ -14,7 +14,7 @@ defmodule HivefinWeb.Jellyfin.SessionsPlayingTest do
         admin: true
       })
 
-    {:ok, token, _} =
+    {:ok, token, access_token} =
       Hivefin.Accounts.issue_token(user, %{
         device_id: "dev",
         device_name: "Dev",
@@ -43,7 +43,7 @@ defmodule HivefinWeb.Jellyfin.SessionsPlayingTest do
         production_year: 2008
       })
 
-    {:ok, conn: conn, user: user, movie: movie}
+    {:ok, conn: conn, user: user, movie: movie, access_token: access_token}
   end
 
   test "POST /Sessions/Playing/Progress upserts UserData ticks", %{
@@ -66,6 +66,44 @@ defmodule HivefinWeb.Jellyfin.SessionsPlayingTest do
     ud = UserData.get(user.id, movie.id)
     assert ud.playback_position_ticks == ticks
     assert %DateTime{} = ud.last_played_date
+  end
+
+  # Important 1(a)/(c): reproduces the crash-loop bug at the real HTTP
+  # boundary. Before the fix, record_session_state forwarded raw params —
+  # a string PositionTicks would later blow up play_state/2 inside a live
+  # socket's handle_info(:sessions_changed, _), and IsPaused: "false" would
+  # have recorded as paused==true via `!!"false"`.
+  test "POST /Sessions/Playing/Progress with string PositionTicks/IsPaused records parsed state",
+       %{conn: conn, movie: movie, access_token: access_token} do
+    # Conn requests run synchronously in the test process, so registering it
+    # as the "socket" for this session lets put_state/2 deliver right here.
+    :ok = Hivefin.Sessions.register(access_token.id)
+
+    conn =
+      post(conn, ~p"/Sessions/Playing/Progress", %{
+        "ItemId" => movie.id,
+        "PositionTicks" => "500",
+        "IsPaused" => "false"
+      })
+
+    assert response(conn, 204)
+
+    assert_receive {:jellyfin_session_state, attrs}
+    assert attrs.position_ticks == 500
+    assert attrs.is_paused == false
+
+    # Feed the recorded state straight into the DTO layer — exactly what a
+    # subscribed socket's sessions_message/1 does — and confirm it no longer
+    # raises (the pre-fix crash) and renders IsPaused correctly (the pre-fix
+    # `!!"false" == true` bug).
+    dto =
+      Hivefin.Jellyfin.Dto.Session.from_access_token(
+        Hivefin.Repo.preload(access_token, :user),
+        state: attrs
+      )
+
+    assert dto["PlayState"]["PositionTicks"] == 500
+    assert dto["PlayState"]["IsPaused"] == false
   end
 
   test "POST /Sessions/Playing then Stopped updates position", %{

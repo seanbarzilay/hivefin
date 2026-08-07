@@ -51,8 +51,8 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   """
   def playing(conn, params) do
     record_session_state(conn, %{
-      item_id: params["ItemId"],
-      position_ticks: params["PositionTicks"],
+      item_id: params["ItemId"] || params["itemId"] || params["item_id"],
+      position_ticks: parse_int(params["PositionTicks"] || params["positionTicks"]),
       is_paused: false
     })
 
@@ -64,9 +64,9 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   """
   def progress(conn, params) do
     record_session_state(conn, %{
-      item_id: params["ItemId"],
-      position_ticks: params["PositionTicks"],
-      is_paused: !!params["IsPaused"]
+      item_id: params["ItemId"] || params["itemId"] || params["item_id"],
+      position_ticks: parse_int(params["PositionTicks"] || params["positionTicks"]),
+      is_paused: parse_bool(params["IsPaused"] || params["isPaused"]) == true
     })
 
     report(conn, params, :progress)

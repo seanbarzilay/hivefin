@@ -95,9 +95,16 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   defp now_playing_item(nil), do: nil
 
   defp now_playing_item(item_id) when is_binary(item_id) do
-    case Hivefin.Library.LibraryContext.get_item(item_id) do
-      nil -> nil
-      item -> Hivefin.Jellyfin.Dto.BaseItem.from_item(item)
+    # Client-supplied id may be dashless (the wire format) or garbage; validate
+    # with the same Id.normalize/1 the rest of the codebase uses before ever
+    # querying — get_item_with_sources/1 would raise ArgumentError trying to
+    # dump a non-UUID as :binary_id, which is fatal here (this runs inside the
+    # socket's handle_info, not a request process).
+    with {:ok, _} <- Hivefin.Jellyfin.Id.normalize(item_id),
+         %{} = item <- Hivefin.Library.LibraryContext.get_item_with_sources(item_id) do
+      Hivefin.Jellyfin.Dto.BaseItem.from_item(item)
+    else
+      _ -> nil
     end
   end
 
