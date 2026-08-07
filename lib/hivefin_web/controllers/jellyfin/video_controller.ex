@@ -75,8 +75,14 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   # encoder's current position stalls for the full cap below, because we
   # transcode strictly forward from 0. Upstream Jellyfin restarts ffmpeg at
   # the requested offset for a seek; we do not.
+  #
+  # Cap kept below hls.js's default fragLoadingTimeOut (20_000ms, 6 retries):
+  # Plug never learns of a client abort, so each poll runs to completion
+  # regardless — a forward seek past the encoder would otherwise pin up to
+  # 6 request processes x ~200 GenServer.calls each into one session before
+  # the client even gives up.
   @segment_wait_poll_ms 100
-  @segment_wait_cap_ms 20_000
+  @segment_wait_cap_ms 8_000
 
   @doc """
   Serves an HLS media segment produced by an active FFmpeg session.
@@ -345,43 +351,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
         # Relative to master.m3u8 so hls.js resolves against the API host,
         # not the jellyfin-vue page origin (different port → 404).
-        result =
-          case Playlist.build(
-                 source_runtime_seconds(claims),
-                 Args.hls_segment_seconds(),
-                 session_id,
-                 token
-               ) do
-            {:ok, body} ->
-              # We build the full segment list ourselves from the known
-              # runtime, so we only need to know ffmpeg started — no need to
-              # wait for a minimum segment count on disk (hls_segment/2
-              # polls for segments that aren't written yet).
-              case Session.await_ready(pid, 30_000) do
-                {:ok, _} ->
-                  _ = Session.keepalive(pid)
-                  {:ok, body}
-
-                error ->
-                  error
-              end
-
-            :fallback ->
-              Logger.debug(
-                "HLS: unknown/zero source runtime for session #{session_id}; " <>
-                  "falling back to ffmpeg's EVENT playlist"
-              )
-
-              case await_hls_playlist(pid, 30_000) do
-                {:ok, ffmpeg_body} ->
-                  _ = Session.keepalive(pid)
-                  {:ok, rewrite_hls_playlist(ffmpeg_body, session_id, token)}
-
-                error ->
-                  error
-              end
-          end
-
+        result = build_hls_result(mode, pid, claims, session_id, token)
         send_hls_ready_result(conn, result)
 
       {:error, :busy} ->
@@ -392,6 +362,62 @@ defmodule HivefinWeb.Jellyfin.VideoController do
       {:error, reason} ->
         Logger.warning("hls #{mode} session failed: #{inspect(reason)}")
         conn |> put_status(:internal_server_error) |> json(%{"error" => "hls_failed"})
+    end
+  end
+
+  # :remux is a stream copy (-c copy): ffmpeg has no keyframe control, so
+  # -hls_time only splits at the next *source* keyframe, not at a fixed
+  # interval — segment durations are whatever the source's GOP structure
+  # happens to produce (e.g. 10s segments for a 10s-GOP rip even though
+  # hls_segment_seconds/0 says 4). Our VOD builder assumes fixed
+  # hls_segment_seconds/0-length segments, which only holds for :transcode
+  # (pinned by -force_key_frames). Building a correct VOD playlist for
+  # remux would need durations read back from ffmpeg's own finalized
+  # #EXTINF values, not computed from runtime/segment_seconds — not
+  # attempted here. Always serve ffmpeg's own EVENT playlist for remux.
+  defp build_hls_result(:remux, pid, _claims, session_id, token) do
+    serve_ffmpeg_playlist(pid, session_id, token)
+  end
+
+  defp build_hls_result(:transcode, pid, claims, session_id, token) do
+    case Playlist.build(
+           source_runtime_seconds(claims),
+           Args.hls_segment_seconds(),
+           session_id,
+           token
+         ) do
+      {:ok, body} ->
+        # We build the full segment list ourselves from the known runtime,
+        # so we only need to know ffmpeg started — no need to wait for a
+        # minimum segment count on disk (hls_segment/2 polls for segments
+        # that aren't written yet).
+        case Session.await_ready(pid, 30_000) do
+          {:ok, _} ->
+            _ = Session.keepalive(pid)
+            {:ok, body}
+
+          error ->
+            error
+        end
+
+      :fallback ->
+        Logger.debug(
+          "HLS: unknown/zero source runtime for session #{session_id}; " <>
+            "falling back to ffmpeg's EVENT playlist"
+        )
+
+        serve_ffmpeg_playlist(pid, session_id, token)
+    end
+  end
+
+  defp serve_ffmpeg_playlist(pid, session_id, token) do
+    case await_hls_playlist(pid, 30_000) do
+      {:ok, ffmpeg_body} ->
+        _ = Session.keepalive(pid)
+        {:ok, rewrite_hls_playlist(ffmpeg_body, session_id, token)}
+
+      error ->
+        error
     end
   end
 

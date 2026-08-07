@@ -62,6 +62,45 @@ defmodule Hivefin.Playback.Hls.PlaylistTest do
 
       assert playlist =~ "api_key=a+b%26c"
     end
+
+    test "TARGETDURATION is an integer >= the longest EXTINF" do
+      playlist = Playlist.build_vod(30.0, 4, "sess-td", "tok")
+
+      [_, target_str] = Regex.run(~r/^#EXT-X-TARGETDURATION:(\d+)$/m, playlist)
+      target = String.to_integer(target_str)
+
+      extinf_values =
+        Regex.scan(~r/^#EXTINF:([\d.]+),$/m, playlist)
+        |> Enum.map(fn [_, v] -> String.to_float(v) end)
+
+      # Non-vacuous: fails if the playlist has no EXTINF lines to compare against.
+      assert extinf_values != []
+      assert target >= Enum.max(extinf_values)
+    end
+
+    test "carries EXT-X-VERSION and EXT-X-MEDIA-SEQUENCE" do
+      playlist = Playlist.build_vod(30.0, 4, "sess-vm", "tok")
+
+      assert playlist =~ "#EXT-X-VERSION:6"
+      assert playlist =~ "#EXT-X-MEDIA-SEQUENCE:0"
+    end
+
+    test "pads the segment index past 999 the same way ffmpeg's seg_%03d.ts does" do
+      # 1001 segments (000..1000); runtime divides evenly so there's no
+      # trailing remainder segment to account for.
+      playlist = Playlist.build_vod(4004.0, 4, "sess-pad", "tok")
+
+      uris =
+        playlist
+        |> String.split("\n")
+        |> Enum.filter(&String.starts_with?(&1, "hls/"))
+
+      # Non-vacuous: fails if no segment URIs were emitted.
+      assert uris != []
+      assert length(uris) == 1001
+      assert "hls/sess-pad/seg_999.ts?api_key=tok" in uris
+      assert "hls/sess-pad/seg_1000.ts?api_key=tok" in uris
+    end
   end
 
   describe "build/4" do

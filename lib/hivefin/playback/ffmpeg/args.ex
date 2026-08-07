@@ -139,8 +139,11 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     # setpts/asetpts force a timeline from 0 — source files often start at
     # non-zero PTS which breaks hls.js after a few segments.
     filters = if encoder == :vaapi, do: [], else: video_filter_args(height)
-    # Force IDR every ~4s so HLS segments start on keyframes.
-    gop = ["-force_key_frames", "expr:gte(t,n_forced*4)"]
+    # Force IDR every @hls_segment_seconds so HLS segments start on
+    # keyframes — this (not -g/-keyint_min below) is what actually pins
+    # segment boundaries to wall-clock time, so it's the one GOP knob that
+    # must track hls_segment_seconds/0.
+    gop = ["-force_key_frames", "expr:gte(t,n_forced*#{@hls_segment_seconds})"]
 
     audio = [
       "-c:a",
@@ -162,7 +165,11 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     base ++ video ++ gop ++ filters ++ audio ++ ts_fix ++ out
   end
 
-  # Fixed GOP so -hls_time segments actually split near the target duration.
+  # Max GOP size (frames) as a safety net between forced keyframes above —
+  # not the segment-boundary control itself, so it does NOT need to track
+  # hls_segment_seconds/0. 96 assumes ~24fps; deriving an exact frame count
+  # from a seconds value would need the source's real frame rate (23.976,
+  # 25, 30, 60...), which isn't known here, so it stays a fixed frame count.
   # main + no B-frames: max HTML5 / Android WebView MSE compatibility.
   defp video_encode_args(:libx264, _bitrate) do
     [
@@ -315,8 +322,15 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       # continuously regardless of what we serve.
       "-hls_playlist_type",
       "event",
+      # temp_file: write to `<segment>.tmp` and rename on completion. Without
+      # it, ffmpeg 5.1 (production image) opens the final filename at
+      # segment start and flushes through a small buffer, so a client
+      # requesting a segment mid-write gets a truncated .ts —
+      # DEMUXER_ERROR_COULD_NOT_PARSE, the exact bug this VOD playlist fixes.
+      # Our dev ffmpeg (8.1) happens to buffer the whole segment before the
+      # file appears, which hid this.
       "-hls_flags",
-      "independent_segments",
+      "independent_segments+temp_file",
       "-hls_segment_type",
       segment_type
     ] ++

@@ -372,20 +372,48 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
   end
 
   @tag :ffmpeg
-  test "GET master.m3u8 serves a VOD playlist (not EVENT) and its segments are fetchable", %{
-    movie: movie,
-    source: source,
-    user: user
-  } do
+  test "GET master.m3u8 (Transcode=true) serves a VOD playlist sized to ceil(runtime/segment), every listed segment fetches 200",
+       %{user: user} do
+    # Big Buck Bunny (2008).mp4 (the shared setup fixture) is 1.000000s, so
+    # ceil(1/4) == 1 regardless of whether the segment-count formula is
+    # right — degenerate. A 12s source makes ceil(12/4) == 3 discriminating,
+    # and Transcode=true exercises the mode where segments are actually
+    # pinned to hls_segment_seconds/0 by -force_key_frames (remux is a
+    # stream copy with no keyframe control — see build_hls_result/5 in
+    # VideoController — and intentionally never gets the VOD treatment).
+    tmp_root =
+      Path.join(System.tmp_dir!(), "hivefin-hls-vod-#{System.unique_integer([:positive])}")
+
+    movie_dir = Path.join(tmp_root, "Synth Clip (2024)")
+    fixture = Path.join(movie_dir, "Synth Clip (2024).mp4")
+    File.mkdir_p!(movie_dir)
+    on_exit(fn -> File.rm_rf(tmp_root) end)
+
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ~w(-y -hide_banner -loglevel error -f lavfi -i testsrc=duration=12:size=320x240:rate=24
+           -f lavfi -i sine=duration=12
+           -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest) ++ [fixture]
+      )
+
+    {:ok, library} =
+      LibraryContext.create_library(%{name: "SynthMovies", type: :movies, path: tmp_root})
+
+    assert :ok = Scanner.scan_library_sync(library.id)
+    [movie] = LibraryContext.list_items(library.id, type: :movie)
+    [source] = LibraryContext.list_media_sources(movie.id)
+
     token = StreamToken.sign(user.id, movie.id, source.id)
-    session = "play-hls-#{System.unique_integer([:positive])}"
+    session = "play-hls-vod-#{System.unique_integer([:positive])}"
 
     conn =
       build_conn()
       |> get(~p"/Videos/#{movie.id}/master.m3u8", %{
         "MediaSourceId" => source.id,
         "api_key" => token,
-        "PlaySessionId" => session
+        "PlaySessionId" => session,
+        "Transcode" => "true"
       })
 
     assert conn.status == 200
@@ -404,21 +432,33 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
       |> String.split("\n")
       |> Enum.filter(&String.starts_with?(&1, "hls/"))
 
-    # Non-vacuous: fails if the playlist has no segments to fetch below.
+    # Non-vacuous, and the actual discriminating assertion: a wrong
+    # segment-count formula (or the VOD builder wrongly applied where
+    # ffmpeg doesn't actually cut segments at hls_segment_seconds/0) would
+    # fail this, unlike against the 1s fixture where ceil(1/4) == 1 no
+    # matter what.
     assert segment_lines != []
+    assert length(segment_lines) == ceil(12 / Hivefin.Playback.FFmpeg.Args.hls_segment_seconds())
 
-    [first_segment | _] = segment_lines
-    "hls/" <> session_and_query = first_segment
-    [session_path, query] = String.split(session_and_query, "?", parts: 2)
-    [hls_session_id | _] = String.split(session_path, "/")
+    [hls_session_id | _] =
+      segment_lines |> hd() |> String.trim_leading("hls/") |> String.split("/")
+
     on_exit(fn -> Hivefin.Playback.Session.stop(hls_session_id) end)
 
-    seg_conn =
-      build_conn()
-      |> get("/Videos/#{movie.id}/hls/#{session_path}?#{query}")
+    # Every segment the playlist lists must actually be fetchable — this is
+    # what would have caught the VOD-for-remux bug: a playlist advertising
+    # segments ffmpeg never writes 404s here instead of passing silently.
+    for segment_line <- segment_lines do
+      "hls/" <> session_and_query = segment_line
+      [session_path, query] = String.split(session_and_query, "?", parts: 2)
 
-    assert seg_conn.status == 200
-    assert byte_size(response(seg_conn, 200)) > 0
+      seg_conn =
+        build_conn()
+        |> get("/Videos/#{movie.id}/hls/#{session_path}?#{query}")
+
+      assert seg_conn.status == 200
+      assert byte_size(response(seg_conn, 200)) > 0
+    end
   end
 
   test "PlaybackInfo respects nested playbackInfoDto.DeviceProfile (SDK shape)", %{
