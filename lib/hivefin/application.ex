@@ -34,6 +34,7 @@ defmodule Hivefin.Application do
       Hivefin.Metadata.RateLimiter,
       Hivefin.Metadata.Queue,
       {Registry, keys: :unique, name: Hivefin.Playback.Registry},
+      Hivefin.Sessions,
       Hivefin.Playback.Supervisor,
       # Start to serve requests, typically the last entry
       HivefinWeb.Endpoint
