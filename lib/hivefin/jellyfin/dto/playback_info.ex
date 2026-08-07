@@ -110,8 +110,14 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
 
     {container, media_streams, audio_index} =
       if reencoded? do
-        # Android ExoPlayer DeviceProfile TranscodingProfile uses container "ts".
-        {"ts", output_media_streams(video), 1}
+        # Container stays the SOURCE container even when re-encoding, as upstream
+        # Jellyfin does. The transcode shape is advertised by TranscodingContainer
+        # ("ts") + TranscodingSubProtocol ("hls") instead, which is what clients
+        # actually read. Reporting Container: "ts" made jellyfin-web treat the
+        # stream as MPEG-TS and hand it to the native <video> element, which Chrome
+        # cannot demux — PipelineStatus::DEMUXER_ERROR_COULD_NOT_PARSE, so hls.js
+        # was never used. MediaStreams still describe the *output* (h264/aac at 0/1).
+        {source.container, output_media_streams(video), 1}
       else
         {source.container, Enum.map(streams, &from_media_stream/1), default_audio_index}
       end

@@ -458,7 +458,11 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     # jellyfin-vue requires HLS for non-DirectPlay (always uses hls.js)
     assert ms["TranscodingSubProtocol"] == "hls"
     assert ms["TranscodingContainer"] == "ts"
-    assert ms["Container"] == "ts"
+    # Container stays the SOURCE container — this fixture is mp4. Reporting "ts"
+    # made jellyfin-web treat the stream as MPEG-TS and use the native <video>
+    # element, which Chrome cannot demux (DEMUXER_ERROR_COULD_NOT_PARSE), so
+    # hls.js was never engaged.
+    assert ms["Container"] == "mp4"
     assert ms["Protocol"] == "File"
     assert ms["DefaultAudioStreamIndex"] == 1
     refute Map.get(ms, "StreamUrl")
@@ -546,7 +550,10 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["SupportsTranscoding"] == true
     assert ms["TranscodingSubProtocol"] == "hls"
     assert ms["TranscodingContainer"] == "ts"
-    assert ms["Container"] == "ts"
+    # Container stays the SOURCE container. Reporting "ts" made jellyfin-web treat
+    # the stream as MPEG-TS and use the native <video> element, which Chrome cannot
+    # demux (DEMUXER_ERROR_COULD_NOT_PARSE) so hls.js was never engaged.
+    assert ms["Container"] == "mkv"
     assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Transcode=true"
     # StreamUrl must be absent — jellyfin-web short-circuits on it.
