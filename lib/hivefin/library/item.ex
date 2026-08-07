@@ -14,6 +14,7 @@ defmodule Hivefin.Library.Item do
     field :index_number, :integer
     field :parent_index_number, :integer
     field :provider_ids, :map, default: %{}
+    # DB column is :text (see migrations)
     field :overview, :string
 
     belongs_to :library, Hivefin.Library.Library

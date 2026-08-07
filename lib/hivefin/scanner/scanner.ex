@@ -355,15 +355,22 @@ defmodule Hivefin.Scanner do
       end
 
       if PathRules.under_root?(root, path) do
-        case import_fun.(library, root, path) do
-          {:ok, :created} ->
-            {found + 1, added + 1}
+        try do
+          case import_fun.(library, root, path) do
+            {:ok, :created} ->
+              {found + 1, added + 1}
 
-          {:ok, _} ->
-            {found + 1, added}
+            {:ok, _} ->
+              {found + 1, added}
 
-          {:error, reason} ->
-            Logger.warning("skip #{path}: #{inspect(reason)}")
+            {:error, reason} ->
+              Logger.warning("skip #{path}: #{inspect(reason)}")
+              {found, added}
+          end
+        rescue
+          e ->
+            # Never abort the whole library on one bad path (e.g. oversize name)
+            Logger.warning("skip #{path}: #{Exception.message(e)}")
             {found, added}
         end
       else
