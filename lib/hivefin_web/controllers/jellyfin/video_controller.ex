@@ -302,9 +302,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
-  # jellyfin-vue DeviceProfile MinSegments is typically 1–2. Wait for two
-  # segments so hls.js has a small buffer before we hand back the playlist.
-  @hls_min_segments 2
+  # Hand playlist back as soon as the first segment exists. Waiting for more
+  # just delays first paint; hls.js will poll for additional segments.
+  @hls_min_segments 1
 
   # Wait until the session is ready and the playlist lists enough segments.
   defp await_hls_playlist(pid, timeout_ms) do

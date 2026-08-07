@@ -254,10 +254,11 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       Integer.to_string(hls_time),
       "-hls_list_size",
       "0",
-      # VOD: matches Jellyfin's HLS muxer. Playlist grows until FFmpeg finishes
-      # (ENDLIST written on exit). hls.js treats this more reliably than EVENT/live.
+      # EVENT (not VOD): stock FFmpeg only writes the .m3u8 after the encode
+      # finishes when type=vod, so the client never sees segments mid-stream.
+      # EVENT updates the playlist as each segment is finalized.
       "-hls_playlist_type",
-      "vod",
+      "event",
       "-hls_flags",
       "independent_segments",
       "-hls_segment_filename",
