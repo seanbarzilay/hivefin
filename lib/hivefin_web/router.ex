@@ -83,6 +83,10 @@ defmodule HivefinWeb.Router do
     get "/Videos/:item_id/stream.:container", VideoController, :stream
     get "/Videos/:item_id/master.m3u8", VideoController, :master_m3u8
     get "/Videos/:item_id/hls/:session_id/:file", VideoController, :hls_segment
+
+    # Jellyfin WebSocket. Auth happens in the controller (api_key or header),
+    # like the stream routes, so it cannot sit behind the JSON-only pipeline.
+    get "/socket", SocketController, :connect
   end
 
   # Binary images: browsers/vue load these via <img src> with Accept: image/*
@@ -113,7 +117,6 @@ defmodule HivefinWeb.Router do
     get "/Localization/Options", LocalizationController, :options
     get "/Localization/Countries", LocalizationController, :countries
     get "/Localization/ParentalRatings", LocalizationController, :parental_ratings
-
 
     pipe_through :jellyfin_auth
     get "/System/Info", SystemController, :info
@@ -161,7 +164,6 @@ defmodule HivefinWeb.Router do
     post "/Sessions/Playing/Progress", SessionsController, :progress
     post "/Sessions/Playing/Stopped", SessionsController, :stopped
   end
-
 
   scope "/api", HivefinWeb do
     pipe_through :api
