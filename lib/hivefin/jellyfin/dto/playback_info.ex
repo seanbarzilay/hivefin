@@ -53,7 +53,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
 
     media_sources =
       Enum.map(sources, fn source ->
-        from_media_source(source, item, user, profile, play_session_id, base_url)
+        from_media_source(source, item, user, profile, play_session_id, base_url, browser_safe?)
       end)
 
     %{
@@ -68,9 +68,20 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
          %User{} = user,
          profile,
          play_session_id,
-         base_url
+         base_url,
+         browser_safe?
        ) do
     {method, meta} = Decision.choose(source, profile)
+
+    # HTML5/hls.js needs keyframe-aligned segments. Stream-copy remux of long-GOP
+    # H.264 MKV often downloads segs but never paints (stuck UI) in Android WebView.
+    {method, meta} =
+      if browser_safe? and method in [:direct_stream, :transcode] do
+        {:transcode, Map.put(meta, :reason, :browser_safe_transcode)}
+      else
+        {method, meta}
+      end
+
     token = StreamToken.sign(user.id, item.id, source.id)
 
     streams =
@@ -146,6 +157,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     # Always HLS for remux/transcode. Progressive fMP4 is aborted by browsers
     # after ~1s (range probes / incomplete timeline) — broken pipe in FFmpeg.
     rel = hls_url(item_id, item_id, token, session, transcode?: method == :transcode)
+    abs = absolutize(base_url, rel)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
@@ -154,7 +166,9 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "DirectStreamUrl" => nil,
       # Do not put m3u8 in Path — DirectPlay Path is for progressive files only.
       "Path" => nil,
-      "StreamUrl" => absolutize(base_url, rel),
+      # Absolute StreamUrl for native Android ExoPlayer; relative TranscodingUrl
+      # for jellyfin-web getUrl() (which prefixes serverAddress).
+      "StreamUrl" => abs,
       "TranscodingUrl" => rel,
       "TranscodingSubProtocol" => "hls",
       "TranscodingContainer" => "ts",

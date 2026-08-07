@@ -28,7 +28,9 @@ defmodule Hivefin.Playback.Session do
   @registry Hivefin.Playback.Registry
   @ready_timeout_ms 15_000
   @chunk_timeout_ms 10_000
-  @default_idle_ms 60_000
+  # HLS clients only hit the server every few seconds (segment duration).
+  # 60s was tight when master reloads stall; keep producers warm longer.
+  @default_idle_ms 180_000
 
   defstruct [
     :id,
