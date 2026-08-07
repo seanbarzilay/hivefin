@@ -28,19 +28,20 @@ defmodule HivefinWeb.Jellyfin.UserController do
       json(conn, %{
         "User" => Dto.User.from_user(user),
         "AccessToken" => token,
-        "ServerId" => SystemInfo.server_id(),
+        "ServerId" => Hivefin.Jellyfin.Id.format(SystemInfo.server_id()),
         "SessionInfo" => %{
-          "Id" => at.id,
-          "UserId" => user.id,
+          "Id" => Hivefin.Jellyfin.Id.format(at.id),
+          "UserId" => Hivefin.Jellyfin.Id.format(user.id),
           "UserName" => user.name,
           "Client" => device_attrs[:client],
           "DeviceName" => device_attrs[:device_name],
           "DeviceId" => device_attrs[:device_id],
           "ApplicationVersion" => device_attrs[:client_version],
           "IsActive" => true,
-          "ServerId" => SystemInfo.server_id()
+          "ServerId" => Hivefin.Jellyfin.Id.format(SystemInfo.server_id())
         }
       })
+
     else
       {:error, :invalid_credentials} ->
         conn

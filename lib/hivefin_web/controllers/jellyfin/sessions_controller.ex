@@ -146,8 +146,10 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   end
 
   defp authorized_user?(conn, user_id) do
-    conn.assigns.current_user.id == user_id
+    Hivefin.Jellyfin.Id.coerce(conn.assigns.current_user.id) ==
+      Hivefin.Jellyfin.Id.coerce(user_id)
   end
+
 
   defp user_data_attrs_from_body(params) do
     %{

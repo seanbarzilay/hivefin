@@ -11,8 +11,8 @@ defmodule Hivefin.Jellyfin.Dto.User do
   def from_user(%User{} = user) do
     %{
       "Name" => user.name,
-      "Id" => user.id,
-      "ServerId" => Hivefin.Jellyfin.SystemInfo.server_id(),
+      "Id" => Hivefin.Jellyfin.Id.format(user.id),
+      "ServerId" => Hivefin.Jellyfin.Id.format(Hivefin.Jellyfin.SystemInfo.server_id()),
       "HasPassword" => true,
       "HasConfiguredPassword" => true,
       "HasConfiguredEasyPassword" => false,

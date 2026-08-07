@@ -7,8 +7,10 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   """
 
   alias Hivefin.Accounts.User
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Library.{Item, MediaSource, MediaStream}
   alias Hivefin.Playback.{Decision, DeviceProfile, StreamToken}
+
 
   @doc """
   Builds a PlaybackInfo response for an item with preloaded media sources.
@@ -69,8 +71,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       end
 
     base = %{
-      "Id" => source.id,
-      "ItemId" => item.id,
+      "Id" => Id.format(source.id),
+      "ItemId" => Id.format(item.id),
       "Container" => source.container,
       "Size" => source.size,
       "Bitrate" => source.bitrate,
@@ -88,8 +90,11 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     |> drop_nils()
   end
 
-  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta) do
-    url = direct_stream_url(item_id, source_id, token, static: true)
+  defp put_play_method(base, :direct_play, _item_id, source_id, token, _session, _meta) do
+    # Path uses media source id (jellyfin-vue convention)
+    url = direct_stream_url(source_id, source_id, token, static: true)
+
+
 
     Map.merge(base, %{
       "SupportsDirectPlay" => true,
@@ -136,19 +141,28 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     })
   end
 
-  defp direct_stream_url(item_id, source_id, token, opts) do
+  defp direct_stream_url(path_id, source_id, token, opts) do
     static = if Keyword.get(opts, :static, true), do: "true", else: "false"
+    path_id = Id.format(path_id)
+    source_id = Id.format(source_id)
 
-    "/Videos/#{item_id}/stream?MediaSourceId=#{encode(source_id)}&Static=#{static}&api_key=#{encode(token)}"
+    "/Videos/#{path_id}/stream?MediaSourceId=#{encode(source_id)}&Static=#{static}&api_key=#{encode(token)}"
   end
 
   defp remux_url(item_id, source_id, token, session, container) do
+    item_id = Id.format(item_id)
+    source_id = Id.format(source_id)
+
     "/Videos/#{item_id}/stream.#{container}?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false"
   end
 
   defp transcode_url(item_id, source_id, token, session) do
+    item_id = Id.format(item_id)
+    source_id = Id.format(source_id)
+
     "/Videos/#{item_id}/stream.ts?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false&Transcode=true"
   end
+
 
   defp from_media_stream(%MediaStream{} = stream) do
     %{

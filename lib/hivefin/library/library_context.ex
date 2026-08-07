@@ -7,10 +7,12 @@ defmodule Hivefin.Library.LibraryContext do
 
   require Logger
 
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Repo
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, ScanJob}
   alias Hivefin.MediaInfo.Prober
   alias Hivefin.Scanner.PathRules
+
 
   @doc """
   Creates a library.
@@ -33,12 +35,19 @@ defmodule Hivefin.Library.LibraryContext do
   end
 
   def get_library(id) do
-    Repo.get(Library, id)
+    case Id.normalize(id) do
+      {:ok, dashed} -> Repo.get(Library, dashed)
+      :error -> Repo.get(Library, id)
+    end
   end
 
   def get_library!(id) do
-    Repo.get!(Library, id)
+    case Id.normalize(id) do
+      {:ok, dashed} -> Repo.get!(Library, dashed)
+      :error -> Repo.get!(Library, id)
+    end
   end
+
 
   @doc """
   Lists items in a library.
@@ -78,6 +87,7 @@ defmodule Hivefin.Library.LibraryContext do
   Returns `{entries, total_count}` where entries are `%Library{}` or `%Item{}`.
   """
   def list_items_for_parent(parent_id, opts \\ []) do
+    parent_id = if is_nil(parent_id), do: nil, else: Id.coerce(parent_id)
     include_types = normalize_include_types(Keyword.get(opts, :include_item_types))
     recursive? = truthy?(Keyword.get(opts, :recursive, false))
     limit = clamp_non_neg(Keyword.get(opts, :limit))
@@ -131,7 +141,10 @@ defmodule Hivefin.Library.LibraryContext do
     end
   end
 
+
   def get_item(id) do
+    id = Id.coerce(id)
+
     Item
     |> where([i], i.id == ^id)
     |> preload([:parent, :images])
@@ -142,11 +155,14 @@ defmodule Hivefin.Library.LibraryContext do
   Gets an item with media sources and streams preloaded.
   """
   def get_item_with_sources(id) do
+    id = Id.coerce(id)
+
     Item
     |> where([i], i.id == ^id)
     |> preload([:parent, :images, media_sources: :media_streams])
     |> Repo.one()
   end
+
 
   @doc """
   Lists episodes belonging to a series (via season parents).
@@ -198,6 +214,8 @@ defmodule Hivefin.Library.LibraryContext do
   end
 
   def get_media_source(id) do
+    id = Id.coerce(id)
+
     MediaSource
     |> where([ms], ms.id == ^id)
     |> preload([:media_streams, item: :library])
@@ -216,8 +234,9 @@ defmodule Hivefin.Library.LibraryContext do
   Returns `{:ok, path}` or `{:error, :not_found | :forbidden}`.
   """
   def media_path_for_item(item_id, claims) when is_binary(item_id) and is_map(claims) do
-    claim_item_id = Map.get(claims, :item_id) || Map.get(claims, "item_id")
-    source_id = Map.get(claims, :media_source_id) || Map.get(claims, "media_source_id")
+    item_id = Id.coerce(item_id)
+    claim_item_id = Id.coerce(Map.get(claims, :item_id) || Map.get(claims, "item_id"))
+    source_id = Id.coerce(Map.get(claims, :media_source_id) || Map.get(claims, "media_source_id"))
 
     cond do
       not is_binary(claim_item_id) or not is_binary(source_id) ->
@@ -230,6 +249,7 @@ defmodule Hivefin.Library.LibraryContext do
         resolve_media_path(item_id, source_id)
     end
   end
+
 
   def media_path_for_item(_, _), do: {:error, :forbidden}
 

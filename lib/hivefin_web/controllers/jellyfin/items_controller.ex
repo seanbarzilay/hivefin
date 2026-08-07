@@ -293,8 +293,12 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
   defp authorized_user?(conn, user_id) do
     case conn.assigns[:current_user] do
-      %{id: ^user_id} -> true
-      _ -> false
+      %{id: id} ->
+        Hivefin.Jellyfin.Id.coerce(id) == Hivefin.Jellyfin.Id.coerce(user_id)
+
+      _ ->
+        false
     end
   end
 end
+

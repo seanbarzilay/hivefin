@@ -13,8 +13,8 @@ defmodule Hivefin.Jellyfin.Dto.Session do
     user = at.user
 
     %{
-      "Id" => at.id,
-      "UserId" => at.user_id,
+      "Id" => Hivefin.Jellyfin.Id.format(at.id),
+      "UserId" => Hivefin.Jellyfin.Id.format(at.user_id),
       "UserName" => user_name(user),
       "Client" => at.client || "Unknown Client",
       "DeviceId" => at.device_id || "unknown",
@@ -25,7 +25,8 @@ defmodule Hivefin.Jellyfin.Dto.Session do
       "SupportsRemoteControl" => false,
       "HasCustomDeviceName" => false,
       "LastActivityDate" => datetime(at.updated_at || at.inserted_at),
-      "ServerId" => Hivefin.Jellyfin.SystemInfo.server_id(),
+      "ServerId" => Hivefin.Jellyfin.Id.format(Hivefin.Jellyfin.SystemInfo.server_id()),
+
       "PlayableMediaTypes" => ["Video"],
       "SupportedCommands" => [],
       "Capabilities" => %{

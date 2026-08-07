@@ -6,9 +6,11 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   """
 
   alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Jellyfin.SystemInfo
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, UserData}
   alias Hivefin.Metadata.ImageCache
+
 
   @type field_opt :: String.t() | atom()
 
@@ -28,8 +30,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
 
     base = %{
       "Name" => item.name,
-      "Id" => item.id,
-      "ServerId" => SystemInfo.server_id(),
+      # Undashed ids — jellyfin-vue route validateGuard requires /[0-9a-f]{32}/
+      "Id" => Id.format(item.id),
+      "ServerId" => Id.format(SystemInfo.server_id()),
       "Type" => type_name(item.type),
       "MediaType" => media_type(item.type),
       "IsFolder" => folder?(item.type),
@@ -40,9 +43,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "IndexNumber" => item.index_number,
       "ParentIndexNumber" => item.parent_index_number,
       # Movies/root items use library id as ParentId so clients nest under the view.
-      "ParentId" => item.parent_id || item.library_id,
-      "SeriesId" => series_id(item),
-      "SeasonId" => season_id(item),
+      "ParentId" => Id.format(item.parent_id || item.library_id),
+      "SeriesId" => Id.format(series_id(item)),
+      "SeasonId" => Id.format(season_id(item)),
       "ProviderIds" => item.provider_ids || %{},
       "ImageTags" => ImageCache.image_tags_for(item),
       "UserData" => user_data(user_data),
@@ -64,8 +67,8 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
 
     %{
       "Name" => library.name,
-      "Id" => library.id,
-      "ServerId" => SystemInfo.server_id(),
+      "Id" => Id.format(library.id),
+      "ServerId" => Id.format(SystemInfo.server_id()),
       "Type" => type,
       "CollectionType" => collection_type(library.type),
       "IsFolder" => true,
@@ -74,6 +77,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "UserData" => user_data(Keyword.get(opts, :user_data))
     }
   end
+
 
   @doc """
   Query result wrapper used by Items list endpoints.
@@ -139,9 +143,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       end
 
     %{
-      "Id" => source.id,
+      "Id" => Id.format(source.id),
       # ItemId helps clients that key streams by item
-      "ItemId" => source.item_id,
+      "ItemId" => Id.format(source.item_id),
       "Container" => source.container || "mp4",
       "Size" => source.size,
       "Bitrate" => source.bitrate,
@@ -156,6 +160,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     }
     |> drop_nils()
   end
+
 
 
   defp from_media_stream(%MediaStream{} = stream) do

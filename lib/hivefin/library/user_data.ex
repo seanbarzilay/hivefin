@@ -9,9 +9,11 @@ defmodule Hivefin.Library.UserData do
   import Ecto.Changeset
   import Ecto.Query
 
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Repo
 
   @ticks_per_second 10_000_000
+
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -93,6 +95,9 @@ defmodule Hivefin.Library.UserData do
   """
   def upsert(user_id, item_id, attrs)
       when is_binary(user_id) and is_binary(item_id) and is_map(attrs) do
+    user_id = Id.coerce(user_id)
+    item_id = Id.coerce(item_id)
+
     attrs =
       attrs
       |> normalize_attrs()
@@ -101,6 +106,7 @@ defmodule Hivefin.Library.UserData do
     cs =
       %__MODULE__{}
       |> changeset(Map.merge(attrs, %{user_id: user_id, item_id: item_id}))
+
 
     if cs.valid? do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -144,8 +150,9 @@ defmodule Hivefin.Library.UserData do
   end
 
   def get(user_id, item_id) when is_binary(user_id) and is_binary(item_id) do
-    Repo.get_by(__MODULE__, user_id: user_id, item_id: item_id)
+    Repo.get_by(__MODULE__, user_id: Id.coerce(user_id), item_id: Id.coerce(item_id))
   end
+
 
   def get(_, _), do: nil
 
@@ -154,7 +161,8 @@ defmodule Hivefin.Library.UserData do
   """
   def map_for_items(user_id, item_ids)
       when is_binary(user_id) and is_list(item_ids) do
-    item_ids = Enum.filter(item_ids, &is_binary/1)
+    user_id = Id.coerce(user_id)
+    item_ids = item_ids |> Enum.filter(&is_binary/1) |> Enum.map(&Id.coerce/1)
 
     if item_ids == [] do
       %{}
@@ -164,6 +172,7 @@ defmodule Hivefin.Library.UserData do
       |> Map.new(&{&1.item_id, &1})
     end
   end
+
 
   @doc """
   In-progress items for resume rows (`playback_position_ticks > 0`, not fully played).
@@ -175,6 +184,7 @@ defmodule Hivefin.Library.UserData do
   Returns `{[%UserData{}] with item preloaded, total_count}`.
   """
   def list_resume(user_id, opts \\ []) when is_binary(user_id) do
+    user_id = Id.coerce(user_id)
     limit = clamp_non_neg(Keyword.get(opts, :limit, 50))
     start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
 
@@ -185,6 +195,7 @@ defmodule Hivefin.Library.UserData do
             ud.played == false,
         order_by: [desc: ud.last_played_date, desc: ud.updated_at]
       )
+
 
     total = Repo.aggregate(base, :count)
 

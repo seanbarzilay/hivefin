@@ -1,6 +1,8 @@
 defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
   use HivefinWeb.ConnCase, async: true
 
+  alias Hivefin.Jellyfin.Id
+
   alias Hivefin.Library.LibraryContext
 
   @movies_path Path.expand("test/support/fixtures/media_tree/movies", File.cwd!())
@@ -58,7 +60,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
            } = json_response(conn, 200)
 
     assert [view] = items
-    assert view["Id"] == library.id
+    assert view["Id"] == Id.format(library.id)
     assert view["Name"] == "Movies"
     assert view["Type"] == "CollectionFolder"
     assert view["CollectionType"] == "movies"
@@ -84,11 +86,11 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
            } = json_response(conn, 200)
 
     assert [item] = items
-    assert item["Id"] == movie.id
+    assert item["Id"] == Id.format(movie.id)
     assert item["Name"] == "Big Buck Bunny"
     assert item["Type"] == "Movie"
     assert item["ProductionYear"] == 2008
-    assert item["ParentId"] == library.id
+    assert item["ParentId"] == Id.format(library.id)
     assert item["IsFolder"] == false
     assert item["UserData"]["Played"] == false
     refute Map.has_key?(item, "Path")
@@ -115,8 +117,8 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     assert %{"Items" => items, "TotalRecordCount" => 3} = json_response(conn, 200)
     years = Enum.map(items, & &1["ProductionYear"])
     assert years == Enum.sort(years)
-    assert hd(items)["Id"] == older.id
-    assert List.last(items)["Id"] == newer.id
+    assert hd(items)["Id"] == Id.format(older.id)
+    assert List.last(items)["Id"] == Id.format(newer.id)
   end
 
   test "GET /Users/:user_id/Items without ParentId returns libraries as folders", %{
@@ -127,7 +129,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     conn = get(conn, ~p"/Users/#{user.id}/Items")
 
     assert %{"Items" => [item], "TotalRecordCount" => 1} = json_response(conn, 200)
-    assert item["Id"] == library.id
+    assert item["Id"] == Id.format(library.id)
     assert item["Type"] == "CollectionFolder"
   end
 
@@ -141,7 +143,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     assert %{"Id" => id, "Type" => "Movie", "Name" => "Big Buck Bunny"} =
              json_response(conn, 200)
 
-    assert id == movie.id
+    assert id == Id.format(movie.id)
   end
 
   test "GET /Users/:user_id/Items/:item_id returns 404 for missing item", %{
@@ -236,11 +238,11 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
 
       assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
       assert [item] = items
-      assert item["Id"] == series.id
+      assert item["Id"] == Id.format(series.id)
       assert item["Name"] == "Big Buck Bunny"
       assert item["Type"] == "Series"
       assert item["IsFolder"] == true
-      assert item["ParentId"] == library.id
+      assert item["ParentId"] == Id.format(library.id)
     end
 
     test "series ParentId returns seasons", %{
@@ -256,12 +258,12 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
 
       assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
       assert [item] = items
-      assert item["Id"] == season.id
+      assert item["Id"] == Id.format(season.id)
       assert item["Type"] == "Season"
       assert item["IndexNumber"] == 1
-      assert item["SeriesId"] == series.id
+      assert item["SeriesId"] == Id.format(series.id)
       assert item["IsFolder"] == true
-      assert item["ParentId"] == series.id
+      assert item["ParentId"] == Id.format(series.id)
     end
 
     test "season ParentId returns episodes", %{
@@ -278,14 +280,14 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
 
       assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
       assert [item] = items
-      assert item["Id"] == episode.id
+      assert item["Id"] == Id.format(episode.id)
       assert item["Type"] == "Episode"
       assert item["IndexNumber"] == 2
       assert item["ParentIndexNumber"] == 1
-      assert item["SeasonId"] == season.id
-      assert item["SeriesId"] == series.id
+      assert item["SeasonId"] == Id.format(season.id)
+      assert item["SeriesId"] == Id.format(series.id)
       assert item["IsFolder"] == false
-      assert item["ParentId"] == season.id
+      assert item["ParentId"] == Id.format(season.id)
     end
 
     test "SortBy=IndexNumber orders Episode 2 before Episode 10", %{
@@ -316,7 +318,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
 
       assert %{"Items" => items, "TotalRecordCount" => 2} = json_response(conn, 200)
       assert Enum.map(items, & &1["IndexNumber"]) == [2, 10]
-      assert Enum.map(items, & &1["Id"]) == [ep2.id, ep10.id]
+      assert Enum.map(items, & &1["Id"]) == [Id.format(ep2.id), Id.format(ep10.id)]
       # String SortName would put "episode 10" before "episode 2"
       refute Enum.map(items, & &1["Name"]) == ["Episode 10", "Episode 2"]
     end
@@ -330,7 +332,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
 
       assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
       assert [item] = items
-      assert item["Id"] == season.id
+      assert item["Id"] == Id.format(season.id)
       assert item["Type"] == "Season"
     end
 
@@ -343,7 +345,7 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
 
       assert %{"Items" => items, "TotalRecordCount" => 1} = json_response(conn, 200)
       assert [item] = items
-      assert item["Id"] == episode.id
+      assert item["Id"] == Id.format(episode.id)
       assert item["Type"] == "Episode"
     end
   end

@@ -1,6 +1,8 @@
 defmodule HivefinWeb.Jellyfin.PlaybackTest do
   use HivefinWeb.ConnCase, async: true
 
+  alias Hivefin.Jellyfin.Id
+
   alias Hivefin.Library.LibraryContext
   alias Hivefin.Playback.StreamToken
   alias Hivefin.Scanner
@@ -77,15 +79,15 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
            } = json_response(conn, 200)
 
     assert is_binary(session_id)
-    assert media_source["Id"] == source.id
+    assert media_source["Id"] == Id.format(source.id)
     assert media_source["Container"] == "mp4"
     assert media_source["SupportsDirectPlay"] == true
     assert media_source["SupportsDirectStream"] == true
     refute Map.has_key?(media_source, "Path")
     assert is_binary(media_source["DirectStreamUrl"])
-    assert media_source["DirectStreamUrl"] =~ "/Videos/#{movie.id}/stream"
+    assert media_source["DirectStreamUrl"] =~ "/Videos/#{Id.format(source.id)}/stream"
     assert media_source["DirectStreamUrl"] =~ "api_key="
-    assert media_source["DirectStreamUrl"] =~ "MediaSourceId=#{source.id}"
+    assert media_source["DirectStreamUrl"] =~ "MediaSourceId=#{Id.format(source.id)}"
     assert media_source["MediaStreams"] != []
 
     # Token in URL is valid for this user/item/source
@@ -364,7 +366,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     # Source is mp4 — codecs ok, container not in direct play → remux
     conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
     assert %{"MediaSources" => [ms]} = json_response(conn, 200)
-    assert ms["Id"] == source.id
+    assert ms["Id"] == Id.format(source.id)
     assert ms["SupportsDirectPlay"] == false
     assert ms["SupportsDirectStream"] == true
     assert is_binary(ms["TranscodingUrl"])

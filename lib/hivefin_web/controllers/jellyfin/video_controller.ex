@@ -5,8 +5,10 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   alias Hivefin.Accounts
   alias Hivefin.Accounts.User
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Library.{LibraryContext, MediaSource}
   alias Hivefin.Playback.{Session, StreamToken, Supervisor}
+
 
   @doc """
   Progressive DirectPlay (`Static=true`), FFmpeg remux (`Static=false`), or
@@ -96,19 +98,20 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   end
 
   defp authorize_stream_token(path_id, params, claims) do
-    query_msid = params["MediaSourceId"] || params["mediaSourceId"]
+    path_id = Id.coerce(path_id)
+    query_msid = Id.coerce(params["MediaSourceId"] || params["mediaSourceId"])
+    claim_item = Id.coerce(claims.item_id)
+    claim_msid = Id.coerce(claims.media_source_id)
+    claims = %{claims | item_id: claim_item, media_source_id: claim_msid}
 
     cond do
-      # Path is item id (Hivefin PlaybackInfo DirectStreamUrl style)
-      claims.item_id == path_id and
-          (is_nil(query_msid) or query_msid == claims.media_source_id) ->
-        with {:ok, path} <- LibraryContext.media_path_for_item(claims.item_id, claims) do
+      claim_item == path_id and (is_nil(query_msid) or query_msid == claim_msid) ->
+        with {:ok, path} <- LibraryContext.media_path_for_item(claim_item, claims) do
           {:ok, claims, path}
         end
 
-      # Path is media source id (jellyfin-vue style)
-      claims.media_source_id == path_id ->
-        with {:ok, path} <- LibraryContext.media_path_for_item(claims.item_id, claims) do
+      claim_msid == path_id ->
+        with {:ok, path} <- LibraryContext.media_path_for_item(claim_item, claims) do
           {:ok, claims, path}
         end
 
@@ -120,20 +123,20 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   defp authorize_access_token(path_id, params, token) do
     case Accounts.get_user_by_token(token) do
       %User{id: user_id} ->
+        path_id = Id.coerce(path_id)
+
         source_id =
-          params["MediaSourceId"] ||
-            params["mediaSourceId"] ||
-            path_id
+          Id.coerce(params["MediaSourceId"] || params["mediaSourceId"] || path_id)
 
         case LibraryContext.get_media_source(source_id) do
-          %MediaSource{id: msid, item_id: item_id} = source ->
-            # Path may be media source id (vue) or item id (legacy)
+          %MediaSource{id: msid, item_id: item_id} ->
+            item_id = Id.coerce(item_id)
+            msid = Id.coerce(msid)
+
             if path_id == msid or path_id == item_id do
               claims = %{user_id: user_id, item_id: item_id, media_source_id: msid}
 
               with {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
-                # Prefer realpath already returned
-                _ = source
                 {:ok, claims, path}
               end
             else
@@ -141,13 +144,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
             end
 
           nil ->
-            # Try path_id as item with mediaSourceId query required
             case LibraryContext.get_item(path_id) do
-              nil ->
-                {:error, :not_found}
-
-              _item ->
-                {:error, :forbidden}
+              nil -> {:error, :not_found}
+              _item -> {:error, :forbidden}
             end
         end
 
@@ -155,6 +154,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         {:error, :unauthorized}
     end
   end
+
 
 
   defp stream_ffmpeg(conn, path, params, mode) when mode in [:remux, :transcode] do

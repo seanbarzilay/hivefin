@@ -1,6 +1,8 @@
 defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
   use ExUnit.Case, async: true
 
+  alias Hivefin.Jellyfin.Id
+
   alias Hivefin.Jellyfin.Dto.BaseItem
   alias Hivefin.Library.{Item, Library, MediaSource, MediaStream}
 
@@ -23,11 +25,11 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert dto["Type"] == "Movie"
     assert dto["MediaType"] == "Video"
     assert dto["Name"] == "X"
-    assert dto["Id"] == id
+    assert dto["Id"] == Id.format(id)
     assert dto["ProductionYear"] == 2008
     assert dto["IsFolder"] == false
     assert dto["SortName"] == "x"
-    assert dto["ParentId"] == library_id
+    assert dto["ParentId"] == Id.format(library_id)
     assert dto["ImageTags"] == %{}
     assert dto["UserData"]["Played"] == false
     assert dto["UserData"]["PlaybackPositionTicks"] == 0
@@ -49,7 +51,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
       sort_name: "ep"
     }
 
-    assert BaseItem.from_item(item)["ParentId"] == parent_id
+    assert BaseItem.from_item(item)["ParentId"] == Id.format(parent_id)
   end
 
   test "maps series/season/episode types" do
@@ -85,9 +87,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
 
     dto = BaseItem.from_item(season)
     assert dto["Type"] == "Season"
-    assert dto["SeriesId"] == series_id
+    assert dto["SeriesId"] == Id.format(series_id)
     assert dto["IndexNumber"] == 1
-    assert dto["ParentId"] == series_id
+    assert dto["ParentId"] == Id.format(series_id)
     refute Map.has_key?(dto, "SeasonId")
   end
 
@@ -117,11 +119,11 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
 
     dto = BaseItem.from_item(episode)
     assert dto["Type"] == "Episode"
-    assert dto["SeasonId"] == season_id
-    assert dto["SeriesId"] == series_id
+    assert dto["SeasonId"] == Id.format(season_id)
+    assert dto["SeriesId"] == Id.format(series_id)
     assert dto["IndexNumber"] == 2
     assert dto["ParentIndexNumber"] == 1
-    assert dto["ParentId"] == season_id
+    assert dto["ParentId"] == Id.format(season_id)
   end
 
   test "maps library as CollectionFolder" do
@@ -133,7 +135,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert dto["Type"] == "CollectionFolder"
     assert dto["CollectionType"] == "movies"
     assert dto["Name"] == "Movies"
-    assert dto["Id"] == id
+    assert dto["Id"] == Id.format(id)
     assert dto["IsFolder"] == true
     refute Map.has_key?(dto, "Path")
   end
@@ -174,7 +176,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     dto = BaseItem.from_item(item, fields: ["MediaSources"])
 
     assert [source] = dto["MediaSources"]
-    assert source["Id"] == source_id
+    assert source["Id"] == Id.format(source_id)
     assert source["Container"] == "mkv"
     assert source["Size"] == 123
     assert source["RunTimeTicks"] == 50_000_000

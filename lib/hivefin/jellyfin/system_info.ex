@@ -57,10 +57,12 @@ defmodule Hivefin.Jellyfin.SystemInfo do
       "ServerName" => server_name(),
       "Version" => version(),
       "ProductName" => product_name(),
-      "Id" => server_id(),
+      # Undashed — matches jellyfin-vue route id validation
+      "Id" => Hivefin.Jellyfin.Id.format(server_id()),
       "StartupWizardCompleted" => true
     }
   end
+
 
   @doc """
   Authenticated system info. Extends public info with safe host details.
