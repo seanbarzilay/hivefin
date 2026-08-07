@@ -180,6 +180,10 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert source["Container"] == "mkv"
     assert source["Size"] == 123
     assert source["RunTimeTicks"] == 50_000_000
+    # mkv is not browser-native; vue uses this flag to pick hls.js vs <video>
+    assert source["SupportsDirectPlay"] == false
+    assert source["SupportsDirectStream"] == false
+    assert source["SupportsTranscoding"] == true
     refute Map.has_key?(source, "Path")
     assert [stream] = source["MediaStreams"]
     assert stream["Type"] == "Video"
@@ -187,6 +191,80 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert stream["Width"] == 1920
     # jellyfin-vue stream pickers only render DisplayTitle
     assert stream["DisplayTitle"] == "1080p H264 - Default"
+  end
+
+  test "mp4 h264/aac MediaSources mark browser DirectPlay true" do
+    item = %Item{
+      id: Ecto.UUID.generate(),
+      name: "Y",
+      type: :movie,
+      sort_name: "y",
+      media_sources: [
+        %MediaSource{
+          id: Ecto.UUID.generate(),
+          path: "/secret/media/movie.mp4",
+          container: "mp4",
+          media_streams: [
+            %MediaStream{
+              id: Ecto.UUID.generate(),
+              index: 0,
+              type: :video,
+              codec: "h264",
+              width: 1280,
+              height: 720,
+              is_default: true,
+              is_forced: false
+            },
+            %MediaStream{
+              id: Ecto.UUID.generate(),
+              index: 1,
+              type: :audio,
+              codec: "aac",
+              channels: 2,
+              is_default: true,
+              is_forced: false
+            }
+          ]
+        }
+      ]
+    }
+
+    dto = BaseItem.from_item(item, fields: ["MediaSources"])
+    assert [source] = dto["MediaSources"]
+    assert source["SupportsDirectPlay"] == true
+    assert source["SupportsDirectStream"] == true
+  end
+
+  test "hevc MediaSources mark browser DirectPlay false" do
+    item = %Item{
+      id: Ecto.UUID.generate(),
+      name: "Z",
+      type: :movie,
+      sort_name: "z",
+      media_sources: [
+        %MediaSource{
+          id: Ecto.UUID.generate(),
+          path: "/secret/media/movie.mp4",
+          container: "mp4",
+          media_streams: [
+            %MediaStream{
+              id: Ecto.UUID.generate(),
+              index: 0,
+              type: :video,
+              codec: "hevc",
+              width: 3840,
+              height: 2160,
+              is_default: true,
+              is_forced: false
+            }
+          ]
+        }
+      ]
+    }
+
+    dto = BaseItem.from_item(item, fields: ["MediaSources"])
+    assert [source] = dto["MediaSources"]
+    assert source["SupportsDirectPlay"] == false
   end
 
   test "builds DisplayTitle and ChannelLayout for audio streams" do

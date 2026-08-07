@@ -142,6 +142,13 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
         _ -> []
       end
 
+    # jellyfin-vue selects the *player* (native <video> vs hls.js) from
+    # Item.MediaSources.SupportsDirectPlay — NOT PlaybackInfo. If this is
+    # always true, vue assigns master.m3u8 to video.src and Chrome never
+    # runs hls.js (no segments, "nothing plays"). Only mark DirectPlay for
+    # formats browsers can actually decode without MSE/HLS.
+    browser_dp? = browser_direct_play_safe?(source, streams)
+
     %{
       "Id" => Id.format(source.id),
       # ItemId helps clients that key streams by item
@@ -153,12 +160,34 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "Type" => "Default",
       # Http so browsers fetch via progressive stream URL
       "Protocol" => "Http",
-      "SupportsDirectPlay" => true,
-      "SupportsDirectStream" => true,
+      "SupportsDirectPlay" => browser_dp?,
+      "SupportsDirectStream" => browser_dp?,
       "SupportsTranscoding" => true,
       "MediaStreams" => Enum.map(streams, &from_media_stream/1)
     }
     |> drop_nils()
+  end
+
+  # Progressive DirectPlay in Chrome/Firefox/Safari <video> without hls.js.
+  # MKV/HEVC/HDR still DirectPlay via PlaybackInfo for native apps; Item flags
+  # only gate the vue player element choice.
+  defp browser_direct_play_safe?(%MediaSource{} = source, streams) when is_list(streams) do
+    container = source.container |> to_string() |> String.downcase()
+    video = first_stream_codec(streams, :video)
+    audio = first_stream_codec(streams, :audio)
+
+    container in ~w(mp4 m4v webm mov) and
+      video in [nil, "h264", "avc1", "avc", "vp8", "vp9", "av1"] and
+      audio in [nil, "aac", "mp3", "opus", "vorbis", "flac"]
+  end
+
+  defp first_stream_codec(streams, type) do
+    streams
+    |> Enum.find(fn s -> Map.get(s, :type) == type end)
+    |> case do
+      nil -> nil
+      s -> s.codec && String.downcase(s.codec)
+    end
   end
 
 
