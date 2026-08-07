@@ -372,8 +372,12 @@ defmodule HivefinWeb.Jellyfin.SocketTest do
   end
 
   # WebSockAdapter.upgrade/4 validates these per RFC6455 and raises otherwise.
+  # `host` must be spliced into req_headers directly: Plug.Conn.put_req_header/3
+  # raises InvalidHeaderError for "host" (plug/conn.ex:1971), and Plug.Test never
+  # mirrors conn.host into req_headers, which the validator reads.
   defp ws_headers(conn) do
     conn
+    |> Map.update!(:req_headers, &[{"host", conn.host} | &1])
     |> put_req_header("connection", "upgrade")
     |> put_req_header("upgrade", "websocket")
     |> put_req_header("sec-websocket-key", Base.encode64("0123456789abcdef"))
