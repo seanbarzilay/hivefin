@@ -163,6 +163,36 @@ defmodule Hivefin.Library.LibraryContext do
     |> Repo.one()
   end
 
+  @doc """
+  Fetch items and/or libraries by a list of ids (order preserved as much as possible).
+
+  Used by modern `GET /Items?ids=...` (jellyfin-vue library page).
+  """
+  def get_items_by_ids(ids, opts \\ []) when is_list(ids) do
+    preload_sources? = Keyword.get(opts, :preload_media_sources, false)
+
+    ids
+    |> Enum.map(&Id.coerce/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.flat_map(fn id ->
+      cond do
+        item = get_item_maybe_sources(id, preload_sources?) ->
+          [item]
+
+        library = get_library(id) ->
+          [library]
+
+        true ->
+          []
+      end
+    end)
+  end
+
+  defp get_item_maybe_sources(id, true), do: get_item_with_sources(id)
+  defp get_item_maybe_sources(id, false), do: get_item(id)
+
+
 
   @doc """
   Lists episodes belonging to a series (via season parents).

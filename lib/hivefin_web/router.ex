@@ -48,10 +48,17 @@ defmodule HivefinWeb.Router do
     get "/Users/Me", UserController, :me
 
     get "/Users/:user_id/Views", ItemsController, :views
-    # Modern SDK paths used by jellyfin-vue fetchIndexPage after login
+    # Modern SDK paths used by jellyfin-vue (fetchIndexPage + item/library pages)
     get "/UserViews", ItemsController, :user_views
     get "/Items/Latest", ItemsController, :latest
     get "/UserItems/Resume", ItemsController, :user_items_resume
+    # GET /Items before /Items/:id so list is not captured as show
+    get "/Items", ItemsController, :index
+    get "/Items/:item_id/Similar", ItemsController, :similar
+    get "/Items/:item_id/Images/:image_type", ImagesController, :show
+    post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
+    get "/Items/:item_id", ItemsController, :show
+
     # Resume before Items/:item_id so "Resume" is not captured as an id
     get "/Users/:user_id/Items/Resume", ItemsController, :resume
     get "/Users/:user_id/Items", ItemsController, :index
@@ -62,8 +69,7 @@ defmodule HivefinWeb.Router do
     get "/Shows/NextUp", ItemsController, :next_up
     get "/Shows/:series_id/Seasons", ItemsController, :seasons
     get "/Shows/:series_id/Episodes", ItemsController, :episodes
-    get "/Items/:item_id/Images/:image_type", ImagesController, :show
-    post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
+
     get "/DisplayPreferences/:display_preferences_id", DisplayPreferencesController, :show
     post "/DisplayPreferences/:display_preferences_id", DisplayPreferencesController, :update
     get "/Sessions", SessionsController, :index

@@ -65,16 +65,27 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
 
   def index(conn, params) do
-    parent_id = blank_to_nil(params["ParentId"] || params["parentId"])
     opts =
       params
       |> browse_opts()
       # Always preload sources so BaseItem can attach MediaSources for play
       |> Keyword.put(:preload_media_sources, true)
 
-    {entries, total} = LibraryContext.list_items_for_parent(parent_id, opts)
-
     fields = opts[:fields] || []
+    start_index = opts[:start_index] || 0
+
+    # Modern SDK: GET /Items?ids=... (library page loads CollectionFolder this way)
+    ids = parse_ids(params["Ids"] || params["ids"])
+
+    {entries, total} =
+      if ids != [] do
+        entries = LibraryContext.get_items_by_ids(ids, preload_media_sources: true)
+        {entries, length(entries)}
+      else
+        parent_id = blank_to_nil(params["ParentId"] || params["parentId"])
+        LibraryContext.list_items_for_parent(parent_id, opts)
+      end
+
     user_data_map = user_data_map_for(conn, entries)
 
     items =
@@ -86,20 +97,14 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
           BaseItem.from_item(item, fields: fields, user_data: user_data_for(item, user_data_map))
       end)
 
-    start_index = opts[:start_index] || 0
     json(conn, BaseItem.query_result(items, total, start_index))
   end
 
   def show(conn, %{"item_id" => item_id} = params) do
+    # Always preload sources for detail/playback readiness
     fields = parse_fields(params["Fields"] || params["fields"])
-    preload? = "MediaSources" in fields
 
-    item =
-      if preload? do
-        LibraryContext.get_item_with_sources(item_id)
-      else
-        LibraryContext.get_item(item_id)
-      end
+    item = LibraryContext.get_item_with_sources(item_id)
 
     case item do
       %Item{} = item ->
@@ -119,6 +124,7 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
         end
     end
   end
+
 
   @doc """
   `GET /Users/:user_id/Items/Resume` — in-progress items for continue watching.
@@ -159,6 +165,15 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     start_index = clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
     json(conn, BaseItem.query_result([], 0, start_index))
   end
+
+  @doc """
+  `GET /Items/:item_id/Similar` — empty stub (item detail page requests this).
+  """
+  def similar(conn, params) do
+    start_index = clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
+    json(conn, BaseItem.query_result([], 0, start_index))
+  end
+
 
   @doc """
   Jellyfin `GET /Shows/:series_id/Seasons` — seasons under a series.
@@ -287,9 +302,23 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
   defp parse_int(_), do: nil
 
+  defp parse_ids(nil), do: []
+  defp parse_ids(""), do: []
+
+  defp parse_ids(ids) when is_binary(ids) do
+    ids
+    |> String.split([",", "|"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp parse_ids(ids) when is_list(ids), do: Enum.map(ids, &to_string/1)
+  defp parse_ids(_), do: []
+
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(v), do: v
+
 
   defp authorized_user?(conn, user_id) do
     case conn.assigns[:current_user] do
