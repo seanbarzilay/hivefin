@@ -107,16 +107,17 @@ defmodule Hivefin.Playback.FFmpeg.Args do
     base ++ video ++ scale ++ audio ++ out
   end
 
+  # Fixed GOP so -hls_time segments actually split near the target duration.
   defp video_encode_args(:libx264, _bitrate) do
-    ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+    ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", "96", "-keyint_min", "96", "-sc_threshold", "0"]
   end
 
   defp video_encode_args(:videotoolbox, bitrate) do
-    ["-c:v", "h264_videotoolbox", "-b:v", bitrate]
+    ["-c:v", "h264_videotoolbox", "-b:v", bitrate, "-g", "96"]
   end
 
   defp video_encode_args(:nvenc, bitrate) do
-    ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", bitrate]
+    ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", bitrate, "-g", "96", "-forced-idr", "1"]
   end
 
   defp video_encode_args(:vaapi, bitrate) do
@@ -143,7 +144,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
 
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)
-    hls_time = Map.get(opts, :hls_time, 2)
+    hls_time = Map.get(opts, :hls_time, 4)
 
     [
       "-f",
@@ -152,6 +153,9 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       Integer.to_string(hls_time),
       "-hls_list_size",
       "0",
+      # EVENT: growing playlist without ENDLIST until FFmpeg exits — hls.js keeps polling.
+      "-hls_playlist_type",
+      "event",
       "-hls_flags",
       "independent_segments",
       "-hls_segment_filename",

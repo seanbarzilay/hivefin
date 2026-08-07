@@ -277,12 +277,14 @@ defmodule HivefinWeb.Jellyfin.VideoController do
             case File.read(playlist_path) do
               {:ok, body} ->
                 token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
-                item_id = Id.format(params["item_id"] || Map.get(claims, :item_id))
-                rewritten = rewrite_hls_playlist(body, item_id, session_id, token)
+                # Relative to master.m3u8 so hls.js resolves against the API host,
+                # not the jellyfin-vue page origin (different port → 404).
+                rewritten = rewrite_hls_playlist(body, session_id, token)
 
                 conn
                 |> put_resp_content_type("application/vnd.apple.mpegurl", nil)
                 |> put_resp_header("cache-control", "no-cache")
+                |> put_resp_header("access-control-expose-headers", "content-type")
                 |> send_resp(200, rewritten)
 
               {:error, reason} ->
@@ -312,7 +314,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
-  defp rewrite_hls_playlist(body, item_id, session_id, token) when is_binary(body) do
+  defp rewrite_hls_playlist(body, session_id, token) when is_binary(body) do
     token_q = URI.encode_www_form(token)
 
     body
@@ -326,8 +328,8 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
         Regex.match?(~r/^seg_\d+\.(ts|m4s)$/i, Path.basename(trimmed)) ->
           name = Path.basename(trimmed)
-
-          "/Videos/#{item_id}/hls/#{session_id}/#{name}?api_key=#{token_q}"
+          # Path-relative to /Videos/:id/master.m3u8 → /Videos/:id/hls/:session/:file
+          "hls/#{session_id}/#{name}?api_key=#{token_q}"
 
         true ->
           line
