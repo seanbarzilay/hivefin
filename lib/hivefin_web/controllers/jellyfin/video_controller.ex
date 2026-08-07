@@ -302,9 +302,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
-  # Hand playlist back as soon as the first segment exists. Waiting for more
-  # just delays first paint; hls.js will poll for additional segments.
-  @hls_min_segments 1
+  # Prefer two segments so hls.js has a next frag before the first ends
+  # (single-seg EVENT playlists often "finish" and restart on reload).
+  @hls_min_segments 2
 
   # Wait until the session is ready and the playlist lists enough segments.
   defp await_hls_playlist(pid, timeout_ms) do
@@ -358,12 +358,15 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   defp rewrite_hls_playlist(body, session_id, token) when is_binary(body) do
     token_q = URI.encode_www_form(token)
+    seg_count = hls_segment_count(body)
 
     rewritten =
       body
-      # hls.js treats EVENT/live playlists as "start at live edge" by default, which
-      # skips early segments once FFmpeg has run ahead of realtime. Force start at 0.
-      |> inject_hls_start_at_zero()
+      # Growing EVENT playlists are "live" in hls.js. EXT-X-START:0 is needed so
+      # the first load does not jump to the live edge — but if we keep injecting
+      # it on every master reload, hls.js re-seeks to 0 after each segment
+      # ("played first segment then reset to start").
+      |> adjust_hls_start_tag(seg_count)
       |> String.split("\n")
       |> Enum.map(fn line ->
         trimmed = String.trim(line)
@@ -387,25 +390,27 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     if String.ends_with?(rewritten, "\n"), do: rewritten, else: rewritten <> "\n"
   end
 
-  defp inject_hls_start_at_zero(body) do
-    cond do
-      String.contains?(body, "#EXT-X-START") ->
-        body
+  # Keep START only while the playlist is still short (initial handoff).
+  # After that, strip it so playlist polls do not restart playback.
+  defp adjust_hls_start_tag(body, seg_count) when seg_count <= 2 do
+    body = strip_hls_start_tag(body)
 
-      String.contains?(body, "#EXT-X-VERSION:") ->
-        # Prefer after VERSION (HLS tag order) when present.
-        String.replace(
-          body,
-          ~r/(#EXT-X-VERSION:\d+\r?\n)/,
-          "\\1#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n",
-          global: false
-        )
-
-      true ->
-        String.replace(body, "#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES",
-          global: false
-        )
+    if String.contains?(body, "#EXT-X-VERSION:") do
+      String.replace(
+        body,
+        ~r/(#EXT-X-VERSION:\d+\r?\n)/,
+        "\\1#EXT-X-START:TIME-OFFSET=0\n",
+        global: false
+      )
+    else
+      String.replace(body, "#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0", global: false)
     end
+  end
+
+  defp adjust_hls_start_tag(body, _seg_count), do: strip_hls_start_tag(body)
+
+  defp strip_hls_start_tag(body) do
+    String.replace(body, ~r/#EXT-X-START:[^\r\n]*\r?\n/i, "")
   end
 
   defp segment_content_type(file) do
