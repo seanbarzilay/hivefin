@@ -671,18 +671,27 @@ defmodule Hivefin.Playback.Session do
   end
 
   defp notify_waiters_closed(state) do
-    {with_data_chunks, closed} =
+    # A fast remux/transcode (stream-copy in particular) can exit before the
+    # 100ms initial :poll_playlist timer ever fires, racing a :ready waiter
+    # registered by await_ready. Check the playlist file here too — not just
+    # the stdout buffer — so a completed HLS session that finished writing
+    # its playlist doesn't get told it "exited" with nothing to show.
+    hls_ready? = is_binary(state.playlist_path) and File.regular?(state.playlist_path)
+
+    {satisfied, closed} =
       Enum.split_with(state.waiters, fn
         {:chunk, _, _} -> byte_size(state.buffer) > 0
-        {:ready, _, _} -> byte_size(state.buffer) > 0
+        {:ready, _, _} -> byte_size(state.buffer) > 0 or hls_ready?
         _ -> false
       end)
 
-    # Ready waiters with buffered data succeed as pipe.
-    Enum.each(with_data_chunks, fn
+    # Ready waiters succeed as :hls (playlist file written) or :pipe
+    # (buffered stdout).
+    Enum.each(satisfied, fn
       {:ready, from, tref} ->
         Process.cancel_timer(tref)
-        GenServer.reply(from, {:ok, :pipe})
+        kind = if hls_ready?, do: :hls, else: :pipe
+        GenServer.reply(from, {:ok, kind})
 
       {:chunk, _from, _tref} ->
         :ok
@@ -690,7 +699,7 @@ defmodule Hivefin.Playback.Session do
 
     # Keep chunk waiters that can still drain buffer
     chunk_waiters =
-      Enum.filter(with_data_chunks, fn
+      Enum.filter(satisfied, fn
         {:chunk, _, _} -> true
         _ -> false
       end)

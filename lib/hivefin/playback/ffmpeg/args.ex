@@ -31,6 +31,20 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   # (Chrome/Firefox/Safari). Plain MPEG-TS is not.
   @fmp4_movflags "frag_keyframe+empty_moov+default_base_moof"
 
+  # Single source of truth for HLS segment duration in seconds. The VOD
+  # playlist we generate for clients (Hivefin.Playback.Hls.Playlist, served
+  # by HivefinWeb.Jellyfin.VideoController) must agree with what we tell
+  # ffmpeg here — a mismatch silently desyncs seeking.
+  @hls_segment_seconds 4
+
+  @doc """
+  Segment duration (seconds) passed to ffmpeg's `-hls_time`. Shared with the
+  VOD playlist builder so the durations advertised to clients always match
+  what ffmpeg actually writes.
+  """
+  @spec hls_segment_seconds() :: pos_integer()
+  def hls_segment_seconds, do: @hls_segment_seconds
+
   @doc """
   Builds args for container remux (stream copy, no re-encode).
 
@@ -38,7 +52,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   - `:output` — path, `"pipe:1"`, or HLS playlist path
   - `:format` — `"mp4"` (default fragmented progressive), `"mpegts"`, or `"hls"`
   - `:hls_segment_pattern` — required when format is `"hls"`
-  - `:hls_time` — segment duration seconds (default 2)
+  - `:hls_time` — segment duration seconds (default: see `hls_segment_seconds/0`)
   """
   @spec remux(String.t(), remux_opts() | map()) :: [String.t()]
   def remux(input, opts) when is_binary(input) and is_map(opts) do
@@ -87,7 +101,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   - `:height` — target height for scale filter (even width auto)
   - `:format` — `"mp4"` (default fragmented progressive), `"mpegts"`, or `"hls"`
   - `:hls_segment_pattern` — required when format is `"hls"`
-  - `:hls_time` — segment duration seconds (default 2)
+  - `:hls_time` — segment duration seconds (default: see `hls_segment_seconds/0`)
   - `:video_bitrate` — used by HW encoders (default `"4M"`)
   - `:audio_bitrate` — AAC bitrate (default `"128k"`)
   """
@@ -270,7 +284,7 @@ defmodule Hivefin.Playback.FFmpeg.Args do
 
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)
-    hls_time = Map.get(opts, :hls_time, 4)
+    hls_time = Map.get(opts, :hls_time, @hls_segment_seconds)
     # Default mpegts: Android ExoPlayer DeviceProfile TranscodingProfile is
     # container=ts, protocol=hls. fMP4 is optional for browser MSE.
     segment_type = Map.get(opts, :hls_segment_type, "mpegts")
@@ -292,7 +306,13 @@ defmodule Hivefin.Playback.FFmpeg.Args do
       "0",
       # EVENT (not VOD): stock FFmpeg only writes the .m3u8 after the encode
       # finishes when type=vod, so the client never sees segments mid-stream.
-      # EVENT updates the playlist as each segment is finalized.
+      # EVENT updates the playlist as each segment is finalized. We never
+      # serve *this* playlist to clients, though: VideoController generates
+      # its own #EXT-X-PLAYLIST-TYPE:VOD playlist from the source's known
+      # runtime (Hivefin.Playback.Hls.Playlist), so hls.js sees a finite
+      # movie instead of a live stream and doesn't chase a live edge. Leave
+      # this flag as `event` — ffmpeg must keep writing segments
+      # continuously regardless of what we serve.
       "-hls_playlist_type",
       "event",
       "-hls_flags",

@@ -7,6 +7,8 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   alias Hivefin.Accounts.User
   alias Hivefin.Jellyfin.Id
   alias Hivefin.Library.{LibraryContext, MediaSource}
+  alias Hivefin.Playback.FFmpeg.Args
+  alias Hivefin.Playback.Hls.Playlist
   alias Hivefin.Playback.{Session, StreamToken, Supervisor}
 
   @doc """
@@ -64,6 +66,18 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
+  # With a VOD playlist the client can legitimately request a segment
+  # slightly ahead of the encoder, so poll instead of 404ing immediately.
+  # The encoder runs ~2.8x realtime, so normal sequential playback stays
+  # ahead and this returns on the first check almost always.
+  #
+  # Known limitation (documented, not solved here): seeking beyond the
+  # encoder's current position stalls for the full cap below, because we
+  # transcode strictly forward from 0. Upstream Jellyfin restarts ffmpeg at
+  # the requested offset for a seek; we do not.
+  @segment_wait_poll_ms 100
+  @segment_wait_cap_ms 20_000
+
   @doc """
   Serves an HLS media segment produced by an active FFmpeg session.
   """
@@ -73,7 +87,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
       ) do
     case authorize_stream(conn, path_id, params) do
       {:ok, _claims, _path} ->
-        case Session.segment_path(session_id, file) do
+        deadline = System.monotonic_time(:millisecond) + @segment_wait_cap_ms
+
+        case await_segment_path(session_id, file, deadline) do
           {:ok, segment} ->
             _ = Session.keepalive(session_id)
 
@@ -91,6 +107,24 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
       {:error, reason} ->
         stream_error(conn, reason)
+    end
+  end
+
+  defp await_segment_path(session_id, file, deadline_ms) do
+    case Session.segment_path(session_id, file) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :invalid} = err ->
+        err
+
+      {:error, :not_found} = err ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          err
+        else
+          Process.sleep(@segment_wait_poll_ms)
+          await_segment_path(session_id, file, deadline_ms)
+        end
     end
   end
 
@@ -308,27 +342,47 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
     case Supervisor.start_session(attrs) do
       {:ok, pid} ->
-        case await_hls_playlist(pid, 30_000) do
-          {:ok, body} ->
-            _ = Session.keepalive(pid)
-            token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
-            # Relative to master.m3u8 so hls.js resolves against the API host,
-            # not the jellyfin-vue page origin (different port → 404).
-            rewritten = rewrite_hls_playlist(body, session_id, token)
+        token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
+        # Relative to master.m3u8 so hls.js resolves against the API host,
+        # not the jellyfin-vue page origin (different port → 404).
+        result =
+          case Playlist.build(
+                 source_runtime_seconds(claims),
+                 Args.hls_segment_seconds(),
+                 session_id,
+                 token
+               ) do
+            {:ok, body} ->
+              # We build the full segment list ourselves from the known
+              # runtime, so we only need to know ffmpeg started — no need to
+              # wait for a minimum segment count on disk (hls_segment/2
+              # polls for segments that aren't written yet).
+              case Session.await_ready(pid, 30_000) do
+                {:ok, _} ->
+                  _ = Session.keepalive(pid)
+                  {:ok, body}
 
-            conn
-            |> put_resp_content_type("application/vnd.apple.mpegurl", nil)
-            |> put_resp_header("cache-control", "no-cache")
-            |> put_resp_header("access-control-expose-headers", "content-type")
-            |> send_resp(200, rewritten)
+                error ->
+                  error
+              end
 
-          {:error, :timeout} ->
-            conn |> put_status(:gateway_timeout) |> json(%{"error" => "session_timeout"})
+            :fallback ->
+              Logger.debug(
+                "HLS: unknown/zero source runtime for session #{session_id}; " <>
+                  "falling back to ffmpeg's EVENT playlist"
+              )
 
-          {:error, reason} ->
-            Logger.warning("hls session not ready: #{inspect(reason)}")
-            conn |> put_status(:internal_server_error) |> json(%{"error" => "session_failed"})
-        end
+              case await_hls_playlist(pid, 30_000) do
+                {:ok, ffmpeg_body} ->
+                  _ = Session.keepalive(pid)
+                  {:ok, rewrite_hls_playlist(ffmpeg_body, session_id, token)}
+
+                error ->
+                  error
+              end
+          end
+
+        send_hls_ready_result(conn, result)
 
       {:error, :busy} ->
         conn
@@ -338,6 +392,43 @@ defmodule HivefinWeb.Jellyfin.VideoController do
       {:error, reason} ->
         Logger.warning("hls #{mode} session failed: #{inspect(reason)}")
         conn |> put_status(:internal_server_error) |> json(%{"error" => "hls_failed"})
+    end
+  end
+
+  defp send_hls_ready_result(conn, {:ok, body}) do
+    conn
+    |> put_resp_content_type("application/vnd.apple.mpegurl", nil)
+    |> put_resp_header("cache-control", "no-cache")
+    |> put_resp_header("access-control-expose-headers", "content-type")
+    |> send_resp(200, body)
+  end
+
+  defp send_hls_ready_result(conn, {:error, :timeout}) do
+    conn |> put_status(:gateway_timeout) |> json(%{"error" => "session_timeout"})
+  end
+
+  defp send_hls_ready_result(conn, {:error, reason}) do
+    Logger.warning("hls session not ready: #{inspect(reason)}")
+    conn |> put_status(:internal_server_error) |> json(%{"error" => "session_failed"})
+  end
+
+  # Runtime (seconds) of the media source backing this session, or `nil` when
+  # unknown — `Playlist.build/4` falls back to ffmpeg's own playlist in that
+  # case rather than emit a broken VOD one.
+  defp source_runtime_seconds(claims) do
+    item_id = Map.get(claims, :item_id)
+    media_source_id = Map.get(claims, :media_source_id)
+
+    source =
+      (is_binary(media_source_id) && LibraryContext.get_media_source(media_source_id)) ||
+        (is_binary(item_id) && LibraryContext.first_media_source_for_item(item_id))
+
+    case source do
+      %MediaSource{duration_ticks: ticks} when is_integer(ticks) and ticks > 0 ->
+        ticks / 10_000_000
+
+      _ ->
+        nil
     end
   end
 

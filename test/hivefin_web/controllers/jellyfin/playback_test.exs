@@ -371,6 +371,56 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     Hivefin.Playback.Session.stop(hold)
   end
 
+  @tag :ffmpeg
+  test "GET master.m3u8 serves a VOD playlist (not EVENT) and its segments are fetchable", %{
+    movie: movie,
+    source: source,
+    user: user
+  } do
+    token = StreamToken.sign(user.id, movie.id, source.id)
+    session = "play-hls-#{System.unique_integer([:positive])}"
+
+    conn =
+      build_conn()
+      |> get(~p"/Videos/#{movie.id}/master.m3u8", %{
+        "MediaSourceId" => source.id,
+        "api_key" => token,
+        "PlaySessionId" => session
+      })
+
+    assert conn.status == 200
+
+    assert get_resp_header(conn, "content-type") |> List.first() =~
+             "application/vnd.apple.mpegurl"
+
+    playlist = response(conn, 200)
+    refute playlist == ""
+    assert playlist =~ "#EXT-X-PLAYLIST-TYPE:VOD"
+    assert playlist =~ "#EXT-X-ENDLIST"
+    refute playlist =~ "EVENT"
+
+    segment_lines =
+      playlist
+      |> String.split("\n")
+      |> Enum.filter(&String.starts_with?(&1, "hls/"))
+
+    # Non-vacuous: fails if the playlist has no segments to fetch below.
+    assert segment_lines != []
+
+    [first_segment | _] = segment_lines
+    "hls/" <> session_and_query = first_segment
+    [session_path, query] = String.split(session_and_query, "?", parts: 2)
+    [hls_session_id | _] = String.split(session_path, "/")
+    on_exit(fn -> Hivefin.Playback.Session.stop(hls_session_id) end)
+
+    seg_conn =
+      build_conn()
+      |> get("/Videos/#{movie.id}/hls/#{session_path}?#{query}")
+
+    assert seg_conn.status == 200
+    assert byte_size(response(seg_conn, 200)) > 0
+  end
+
   test "PlaybackInfo respects nested playbackInfoDto.DeviceProfile (SDK shape)", %{
     conn: conn,
     movie: movie
