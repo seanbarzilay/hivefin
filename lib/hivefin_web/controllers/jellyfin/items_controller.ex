@@ -30,12 +30,14 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
     {entries, _total} =
       LibraryContext.list_items_for_parent(parent_id,
-        include_item_types: ["Movie", "Episode", "Series"],
+        include_item_types: ["Movie", "Episode"],
         recursive: true,
         limit: limit,
         start_index: 0,
-        sort_by: "DateCreated"
+        sort_by: "DateCreated",
+        preload_media_sources: true
       )
+
 
     user_data_map = user_data_map_for(conn, entries)
 
@@ -64,8 +66,14 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
   def index(conn, params) do
     parent_id = blank_to_nil(params["ParentId"] || params["parentId"])
-    opts = browse_opts(params)
+    opts =
+      params
+      |> browse_opts()
+      # Always preload sources so BaseItem can attach MediaSources for play
+      |> Keyword.put(:preload_media_sources, true)
+
     {entries, total} = LibraryContext.list_items_for_parent(parent_id, opts)
+
     fields = opts[:fields] || []
     user_data_map = user_data_map_for(conn, entries)
 

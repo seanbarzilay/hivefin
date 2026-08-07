@@ -21,6 +21,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     dto = BaseItem.from_item(item, user_data: nil)
 
     assert dto["Type"] == "Movie"
+    assert dto["MediaType"] == "Video"
     assert dto["Name"] == "X"
     assert dto["Id"] == id
     assert dto["ProductionYear"] == 2008
@@ -30,8 +31,10 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert dto["ImageTags"] == %{}
     assert dto["UserData"]["Played"] == false
     assert dto["UserData"]["PlaybackPositionTicks"] == 0
-    refute Map.has_key?(dto, "MediaSources")
+    # Always present for playable types (empty when sources not preloaded)
+    assert dto["MediaSources"] == []
   end
+
 
   test "ParentId prefers item parent over library for nested items" do
     library_id = Ecto.UUID.generate()

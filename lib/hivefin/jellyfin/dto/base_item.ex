@@ -23,12 +23,15 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   def from_item(%Item{} = item, opts \\ []) do
     fields = normalize_fields(Keyword.get(opts, :fields, []))
     user_data = Keyword.get(opts, :user_data)
+    playable? = item.type in [:movie, :episode]
+    sources = if playable? or include_field?(fields, "MediaSources"), do: load_sources(item, opts), else: []
 
     base = %{
       "Name" => item.name,
       "Id" => item.id,
       "ServerId" => SystemInfo.server_id(),
       "Type" => type_name(item.type),
+      "MediaType" => media_type(item.type),
       "IsFolder" => folder?(item.type),
       "SortName" => item.sort_name || default_sort_name(item.name),
       "ProductionYear" => item.production_year,
@@ -42,13 +45,16 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "SeasonId" => season_id(item),
       "ProviderIds" => item.provider_ids || %{},
       "ImageTags" => ImageCache.image_tags_for(item),
-      "UserData" => user_data(user_data)
+      "UserData" => user_data(user_data),
+      "RunTimeTicks" => runtime_ticks_from_sources(sources)
     }
 
     base
-    |> maybe_put_media_sources(item, fields, opts)
+    |> maybe_put_media_sources(playable?, fields, sources)
     |> drop_nils()
   end
+
+
 
   @doc """
   Builds a BaseItemDto map for a library root (CollectionFolder / UserView).
@@ -89,25 +95,40 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     }
   end
 
-  defp maybe_put_media_sources(dto, item, fields, opts) do
-    if include_field?(fields, "MediaSources") do
-      sources =
-        Keyword.get(opts, :media_sources) ||
-          Map.get(item, :media_sources) ||
-          []
-
-      sources =
-        case sources do
-          %Ecto.Association.NotLoaded{} -> []
-          list when is_list(list) -> list
-          _ -> []
-        end
-
+  defp maybe_put_media_sources(dto, playable?, fields, sources) do
+    if playable? or include_field?(fields, "MediaSources") do
       Map.put(dto, "MediaSources", Enum.map(sources, &from_media_source/1))
     else
       dto
     end
   end
+
+  defp load_sources(item, opts) do
+    sources =
+      Keyword.get(opts, :media_sources) ||
+        Map.get(item, :media_sources) ||
+        []
+
+    case sources do
+      # Controllers must preload media_sources for playable items (avoid Repo in DTO).
+      %Ecto.Association.NotLoaded{} ->
+        []
+
+      list when is_list(list) ->
+        list
+
+      _ ->
+        []
+    end
+  end
+
+
+  defp runtime_ticks_from_sources([%MediaSource{duration_ticks: ticks} | _])
+       when is_integer(ticks) and ticks > 0,
+       do: ticks
+
+  defp runtime_ticks_from_sources(_), do: nil
+
 
   defp from_media_source(%MediaSource{} = source) do
     streams =
@@ -119,19 +140,23 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
 
     %{
       "Id" => source.id,
-      "Container" => source.container,
+      # ItemId helps clients that key streams by item
+      "ItemId" => source.item_id,
+      "Container" => source.container || "mp4",
       "Size" => source.size,
       "Bitrate" => source.bitrate,
       "RunTimeTicks" => source.duration_ticks,
       "Type" => "Default",
-      "Protocol" => "File",
+      # Http so browsers fetch via progressive stream URL
+      "Protocol" => "Http",
       "SupportsDirectPlay" => true,
       "SupportsDirectStream" => true,
-      "SupportsTranscoding" => false,
+      "SupportsTranscoding" => true,
       "MediaStreams" => Enum.map(streams, &from_media_stream/1)
     }
     |> drop_nils()
   end
+
 
   defp from_media_stream(%MediaStream{} = stream) do
     %{
@@ -155,6 +180,12 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   defp type_name(:season), do: "Season"
   defp type_name(:episode), do: "Episode"
   defp type_name(other) when is_atom(other), do: other |> Atom.to_string() |> Macro.camelize()
+
+  # jellyfin-vue keys off MediaType === "Video" for the local player
+  defp media_type(:movie), do: "Video"
+  defp media_type(:episode), do: "Video"
+  defp media_type(_), do: nil
+
 
   defp stream_type_name(:video), do: "Video"
   defp stream_type_name(:audio), do: "Audio"

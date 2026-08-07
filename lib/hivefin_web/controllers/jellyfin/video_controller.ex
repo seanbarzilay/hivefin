@@ -3,52 +3,40 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
   require Logger
 
-  alias Hivefin.Library.LibraryContext
+  alias Hivefin.Accounts
+  alias Hivefin.Accounts.User
+  alias Hivefin.Library.{LibraryContext, MediaSource}
   alias Hivefin.Playback.{Session, StreamToken, Supervisor}
 
   @doc """
   Progressive DirectPlay (`Static=true`), FFmpeg remux (`Static=false`), or
   progressive transcode (`Static=false&Transcode=true`).
 
-  Auth: stream token via `api_key` or `Tag` query params (not MediaBrowser header).
+  Path `:item_id` may be either the **item** id or the **media source** id.
+  jellyfin-vue builds `/Videos/{mediaSourceId}/stream.{container}?api_key={accessToken}`.
+
+  Auth via query `api_key` / `Tag` / `apiKey`:
+  - signed stream token (PlaybackInfo DirectStreamUrl), or
+  - user access token (jellyfin-vue direct stream convention)
   """
-  def stream(conn, %{"item_id" => item_id} = params) do
-    token = params["api_key"] || params["Tag"] || params["apiKey"]
+  def stream(conn, %{"item_id" => path_id} = params) do
+    case authorize_stream(path_id, params) do
+      {:ok, claims, path} ->
+        conn = assign(conn, :stream_claims, claims)
 
-    with {:ok, claims} <- StreamToken.verify(token || ""),
-         true <- claims.item_id == item_id,
-         true <- media_source_matches?(claims, params),
-         {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
-      conn = assign(conn, :stream_claims, claims)
+        cond do
+          static_request?(params) ->
+            send_media_file(conn, path)
 
-      cond do
-        static_request?(params) ->
-          send_media_file(conn, path)
+          transcode_request?(params) ->
+            stream_ffmpeg(conn, path, params, :transcode)
 
-        transcode_request?(params) ->
-          stream_ffmpeg(conn, path, params, :transcode)
+          true ->
+            stream_ffmpeg(conn, path, params, :remux)
+        end
 
-        true ->
-          stream_ffmpeg(conn, path, params, :remux)
-      end
-    else
-      {:error, :expired} ->
-        conn |> put_status(:unauthorized) |> json(%{"error" => "token_expired"})
-
-      {:error, :invalid} ->
-        conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
-
-      {:error, :missing} ->
-        conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
-
-      false ->
-        conn |> put_status(:forbidden) |> json(%{"error" => "forbidden"})
-
-      {:error, :forbidden} ->
-        conn |> put_status(:forbidden) |> json(%{"error" => "forbidden"})
-
-      {:error, :not_found} ->
-        conn |> put_status(:not_found) |> json(%{"error" => "not_found"})
+      {:error, reason} ->
+        stream_error(conn, reason)
     end
   end
 
@@ -58,36 +46,116 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   Prefer `TranscodingUrl` from PlaybackInfo (`stream.ts?...&Transcode=true`).
   Concurrent session limit exhausted → 503.
   """
-  def master_m3u8(conn, %{"item_id" => item_id} = params) do
-    token = params["api_key"] || params["Tag"] || params["apiKey"]
+  def master_m3u8(conn, %{"item_id" => path_id} = params) do
+    case authorize_stream(path_id, params) do
+      {:ok, claims, path} ->
+        conn
+        |> assign(:stream_claims, claims)
+        |> then(&stream_ffmpeg(&1, path, params, :transcode))
 
-    with {:ok, claims} <- StreamToken.verify(token || ""),
-         true <- claims.item_id == item_id,
-         true <- media_source_matches?(claims, params),
-         {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
-      conn
-      |> assign(:stream_claims, claims)
-      |> then(&stream_ffmpeg(&1, path, params, :transcode))
-    else
-      {:error, :expired} ->
-        conn |> put_status(:unauthorized) |> json(%{"error" => "token_expired"})
-
-      {:error, :invalid} ->
-        conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
-
-      {:error, :missing} ->
-        conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
-
-      false ->
-        conn |> put_status(:forbidden) |> json(%{"error" => "forbidden"})
-
-      {:error, :forbidden} ->
-        conn |> put_status(:forbidden) |> json(%{"error" => "forbidden"})
-
-      {:error, :not_found} ->
-        conn |> put_status(:not_found) |> json(%{"error" => "not_found"})
+      {:error, reason} ->
+        stream_error(conn, reason)
     end
   end
+
+  defp stream_error(conn, :expired),
+    do: conn |> put_status(:unauthorized) |> json(%{"error" => "token_expired"})
+
+  defp stream_error(conn, :invalid),
+    do: conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
+
+  defp stream_error(conn, :missing),
+    do: conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
+
+  defp stream_error(conn, :unauthorized),
+    do: conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
+
+  defp stream_error(conn, :forbidden),
+    do: conn |> put_status(:forbidden) |> json(%{"error" => "forbidden"})
+
+  defp stream_error(conn, :not_found),
+    do: conn |> put_status(:not_found) |> json(%{"error" => "not_found"})
+
+  defp stream_error(conn, _),
+    do: conn |> put_status(:unauthorized) |> json(%{"error" => "unauthorized"})
+
+  # Resolves path id (item OR media source) + token (stream token OR access token).
+  defp authorize_stream(path_id, params) do
+    token = params["api_key"] || params["Tag"] || params["apiKey"] || ""
+
+    case StreamToken.verify(token) do
+      {:ok, claims} ->
+        authorize_stream_token(path_id, params, claims)
+
+      {:error, :expired} ->
+        {:error, :expired}
+
+      {:error, _} ->
+        authorize_access_token(path_id, params, token)
+    end
+  end
+
+  defp authorize_stream_token(path_id, params, claims) do
+    query_msid = params["MediaSourceId"] || params["mediaSourceId"]
+
+    cond do
+      # Path is item id (Hivefin PlaybackInfo DirectStreamUrl style)
+      claims.item_id == path_id and
+          (is_nil(query_msid) or query_msid == claims.media_source_id) ->
+        with {:ok, path} <- LibraryContext.media_path_for_item(claims.item_id, claims) do
+          {:ok, claims, path}
+        end
+
+      # Path is media source id (jellyfin-vue style)
+      claims.media_source_id == path_id ->
+        with {:ok, path} <- LibraryContext.media_path_for_item(claims.item_id, claims) do
+          {:ok, claims, path}
+        end
+
+      true ->
+        {:error, :forbidden}
+    end
+  end
+
+  defp authorize_access_token(path_id, params, token) do
+    case Accounts.get_user_by_token(token) do
+      %User{id: user_id} ->
+        source_id =
+          params["MediaSourceId"] ||
+            params["mediaSourceId"] ||
+            path_id
+
+        case LibraryContext.get_media_source(source_id) do
+          %MediaSource{id: msid, item_id: item_id} = source ->
+            # Path may be media source id (vue) or item id (legacy)
+            if path_id == msid or path_id == item_id do
+              claims = %{user_id: user_id, item_id: item_id, media_source_id: msid}
+
+              with {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
+                # Prefer realpath already returned
+                _ = source
+                {:ok, claims, path}
+              end
+            else
+              {:error, :forbidden}
+            end
+
+          nil ->
+            # Try path_id as item with mediaSourceId query required
+            case LibraryContext.get_item(path_id) do
+              nil ->
+                {:error, :not_found}
+
+              _item ->
+                {:error, :forbidden}
+            end
+        end
+
+      nil ->
+        {:error, :unauthorized}
+    end
+  end
+
 
   defp stream_ffmpeg(conn, path, params, mode) when mode in [:remux, :transcode] do
     client_session_id = play_session_id(params)
@@ -238,13 +306,6 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
       _ ->
         720
-    end
-  end
-
-  defp media_source_matches?(claims, params) do
-    case params["MediaSourceId"] || params["mediaSourceId"] do
-      nil -> true
-      id -> id == claims.media_source_id
     end
   end
 

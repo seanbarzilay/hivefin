@@ -102,11 +102,39 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert claims.media_source_id == source.id
   end
 
+  test "GET stream with mediaSourceId path and access token (jellyfin-vue)", %{
+    source: source,
+    user: user
+  } do
+    {:ok, access_token, _} =
+      Hivefin.Accounts.issue_token(user, %{
+        device_id: "vue-stream",
+        device_name: "Chrome",
+        client: "Vue",
+        client_version: "1"
+      })
+
+    expected_size = File.stat!(@fixture_mp4).size
+
+    conn =
+      build_conn()
+      |> get(~p"/Videos/#{source.id}/stream.mp4", %{
+        "Static" => "true",
+        "mediaSourceId" => source.id,
+        "api_key" => access_token
+      })
+
+    assert conn.status == 200
+    body = response(conn, 200)
+    assert byte_size(body) == expected_size
+  end
+
   test "POST PlaybackInfo is unauthorized without token", %{movie: movie} do
     conn = build_conn()
     conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", %{})
     assert json_response(conn, 401)
   end
+
 
   test "GET stream serves fixture mp4 with stream token", %{
     movie: movie,
