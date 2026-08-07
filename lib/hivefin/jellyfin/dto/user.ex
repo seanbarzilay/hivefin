@@ -19,14 +19,51 @@ defmodule Hivefin.Jellyfin.Dto.User do
       "EnableAutoLogin" => false,
       "LastLoginDate" => nil,
       "LastActivityDate" => nil,
-      "Configuration" => %{},
+      # jellyfin-web reads Configuration after GET /Users/:id; empty map leaves
+      # home sections/preferences undefined and yields a blank Home shell.
+      "Configuration" => default_configuration(),
       "Policy" => %{
         "IsAdministrator" => user.admin,
         "IsHidden" => false,
         "IsDisabled" => false,
         "EnableAllFolders" => true,
-        "EnableRemoteAccess" => true
+        "EnableRemoteAccess" => true,
+        "EnableMediaPlayback" => true,
+        "EnableAudioPlaybackTranscoding" => true,
+        "EnableVideoPlaybackTranscoding" => true,
+        "EnablePlaybackRemuxing" => true,
+        "EnableContentDeletion" => false,
+        "EnableContentDownloading" => true,
+        "EnableSyncTranscoding" => true,
+        "EnableMediaConversion" => false,
+        "EnableRemoteControlOfOtherUsers" => user.admin,
+        "EnableSharedDeviceControl" => true,
+        "EnableRemoteControlOfSharedDevices" => true,
+        "EnableLiveTvManagement" => false,
+        "EnableLiveTvAccess" => false,
+        "EnableUserPreferenceAccess" => true
       }
+    }
+  end
+
+  defp default_configuration do
+    %{
+      "PlayDefaultAudioTrack" => true,
+      "PlayDefaultSubtitleTrack" => false,
+      "SubtitleLanguagePreference" => "",
+      "AudioLanguagePreference" => "",
+      "DisplayMissingEpisodes" => false,
+      "GroupedFolders" => [],
+      "SubtitleMode" => "Default",
+      "DisplayCollectionsView" => false,
+      "EnableLocalPassword" => false,
+      "OrderedViews" => [],
+      "LatestItemsExcludes" => [],
+      "MyMediaExcludes" => [],
+      "HidePlayedInLatest" => true,
+      "RememberAudioSelections" => true,
+      "RememberSubtitleSelections" => true,
+      "EnableNextEpisodeAutoPlay" => true
     }
   end
 end

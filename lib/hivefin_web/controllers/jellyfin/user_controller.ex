@@ -61,6 +61,42 @@ defmodule HivefinWeb.Jellyfin.UserController do
   end
 
   @doc """
+  `GET /Users/:user_id` — jellyfin-web loads this right after login.
+
+  Without it the shell renders blank Home/Favorites (client retries ~5× then gives up).
+  """
+  def show(conn, %{"user_id" => user_id}) do
+    current = conn.assigns.current_user
+    current_fmt = Hivefin.Jellyfin.Id.format(current.id)
+    requested_fmt =
+      user_id
+      |> to_string()
+      |> String.replace("-", "")
+      |> String.downcase()
+
+    cond do
+      requested_fmt == current_fmt ->
+        json(conn, Dto.User.from_user(current))
+
+      current.admin ->
+        case resolve_user(user_id) do
+          %Hivefin.Accounts.User{} = user ->
+            json(conn, Dto.User.from_user(user))
+
+          nil ->
+            conn
+            |> put_status(:not_found)
+            |> json(%{"error" => "not_found"})
+        end
+
+      true ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{"error" => "not_found"})
+    end
+  end
+
+  @doc """
   Public users list (unauthenticated) for the login user picker.
 
   Returns non-hidden users (Hivefin has no hide flag yet — all users).
@@ -72,6 +108,13 @@ defmodule HivefinWeb.Jellyfin.UserController do
       |> Enum.map(&Dto.User.from_user/1)
 
     json(conn, users)
+  end
+
+  defp resolve_user(user_id) do
+    case Hivefin.Jellyfin.Id.normalize(user_id) do
+      {:ok, dashed} -> Accounts.get_user(dashed)
+      :error -> Accounts.get_user(user_id)
+    end
   end
 
 

@@ -151,6 +151,27 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     assert body["UserId"] == user.id
     assert body["SortBy"] == "SortName"
     assert is_map(body["CustomPrefs"])
+    assert body["CustomPrefs"]["homesection0"] == "smalllibrarytiles"
+    assert body["CustomPrefs"]["homesection3"] == "latestmedia"
+  end
+
+  test "GET /System/Endpoint returns in-network EndPointInfo", %{conn: conn} do
+    body =
+      conn
+      |> get(~p"/System/Endpoint")
+      |> json_response(200)
+
+    assert body["IsLocal"] == true
+    assert body["IsInNetwork"] == true
+  end
+
+  test "GET /Users/:id/Items/Latest returns array not 400", %{conn: conn, user: user} do
+    body =
+      conn
+      |> get(~p"/Users/#{user.id}/Items/Latest", %{"Limit" => "5"})
+      |> json_response(200)
+
+    assert is_list(body)
   end
 
   test "POST /DisplayPreferences/:id returns 204", %{conn: conn, user: user} do

@@ -111,7 +111,10 @@ defmodule HivefinWeb.Router do
 
     pipe_through :jellyfin_auth
     get "/System/Info", SystemController, :info
+    get "/System/Endpoint", SystemController, :endpoint
     get "/Users/Me", UserController, :me
+    # After /Users/Me so "Me" is not captured as a user id
+    get "/Users/:user_id", UserController, :show
 
     get "/Users/:user_id/Views", ItemsController, :views
     # Modern SDK paths used by jellyfin-vue (fetchIndexPage + item/library pages)
@@ -124,7 +127,8 @@ defmodule HivefinWeb.Router do
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
     get "/Items/:item_id", ItemsController, :show
 
-    # Resume before Items/:item_id so "Resume" is not captured as an id
+    # Latest/Resume before Items/:item_id so those names are not captured as ids
+    get "/Users/:user_id/Items/Latest", ItemsController, :latest
     get "/Users/:user_id/Items/Resume", ItemsController, :resume
     get "/Users/:user_id/Items", ItemsController, :index
     get "/Users/:user_id/Items/:item_id", ItemsController, :show

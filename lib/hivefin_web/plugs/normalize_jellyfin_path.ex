@@ -18,6 +18,7 @@ defmodule HivefinWeb.Plugs.NormalizeJellyfinPath do
     ["users", "public"] => ["Users", "Public"],
     ["users", "authenticatebyname"] => ["Users", "AuthenticateByName"],
     ["users", "me"] => ["Users", "Me"],
+    # Prefix rules below cover /users/:id and /users/:id/items/latest etc.
     ["branding", "configuration"] => ["Branding", "Configuration"],
     ["branding", "css"] => ["Branding", "Css"],
     ["branding", "css.css"] => ["Branding", "Css"],

@@ -42,7 +42,22 @@ defmodule HivefinWeb.Jellyfin.DisplayPreferencesController do
       "ScrollDirection" => "Horizontal",
       "ShowBackdrop" => true,
       "ShowSidebar" => false,
-      "CustomPrefs" => %{}
+      # jellyfin-web home sections: empty CustomPrefs → blank Home page.
+      "CustomPrefs" => default_home_custom_prefs()
+    }
+  end
+
+  # Matches Jellyfin's default user home layout (small library tiles + latest).
+  defp default_home_custom_prefs do
+    %{
+      "homesection0" => "smalllibrarytiles",
+      "homesection1" => "resume",
+      "homesection2" => "nextup",
+      "homesection3" => "latestmedia",
+      "homesection4" => "none",
+      "homesection5" => "none",
+      "homesection6" => "none",
+      "tvhome" => "smalllibrarytiles,resume,nextup,latestmedia"
     }
   end
 end

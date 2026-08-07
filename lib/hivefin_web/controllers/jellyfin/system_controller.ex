@@ -30,6 +30,19 @@ defmodule HivefinWeb.Jellyfin.SystemController do
     json(conn, false)
   end
 
+  @doc """
+  `GET /System/Endpoint` — EndPointInfo (`IsLocal`, `IsInNetwork`).
+
+  jellyfin-web calls this after login for network policy; treat LAN clients as in-network.
+  """
+  def endpoint(conn, _params) do
+    # Hivefin is a home LAN server; advertise in-network so clients allow DirectPlay etc.
+    json(conn, %{
+      "IsLocal" => true,
+      "IsInNetwork" => true
+    })
+  end
+
   defp request_base_url(conn) do
     scheme = Atom.to_string(conn.scheme)
     host = conn.host
