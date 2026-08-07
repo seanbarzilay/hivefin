@@ -212,7 +212,7 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     conn = get(conn, ~p"/System/Info")
     body = json_response(conn, 200)
 
-    assert body["ProductName"] == "Hivefin"
+    assert body["ProductName"] == "Jellyfin Server"
     assert body["StartupWizardCompleted"] == true
     assert body["HasUpdateAvailable"] == false
     assert is_integer(body["WebSocketPortNumber"])

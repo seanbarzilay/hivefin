@@ -91,8 +91,8 @@ defmodule HivefinWeb.Compat.Tier02EndpointsTest do
           |> json_response(200)
 
         JellyfinShape.assert_shape(body, expected)
-        # Hivefin identity — never impersonate Jellyfin product name
-        assert body["ProductName"] == "Hivefin"
+        # Discovery identity must match Jellyfin Server for @jellyfin/sdk scoring
+        assert body["ProductName"] == "Jellyfin Server"
       end
 
       test "GET /System/Info matches system_info fixture", %{conn: conn} do
@@ -108,7 +108,7 @@ defmodule HivefinWeb.Compat.Tier02EndpointsTest do
           |> json_response(200)
 
         JellyfinShape.assert_shape(body, expected)
-        assert body["ProductName"] == "Hivefin"
+        assert body["ProductName"] == "Jellyfin Server"
       end
 
       test "GET /Users/:id/Views matches views fixture", %{conn: conn, user: user} do

@@ -7,7 +7,7 @@ Hand-authored **shape contracts** for Jellyfin **10.9.x** Tier 0–2 responses t
 | `web/` | Jellyfin Web client shape (primary golden client) |
 | `androidtv/` | Official Jellyfin Android TV shape notes (hand-authored; **not** a live capture) |
 
-Compatibility target: clients built for Jellyfin **10.9.x**. Hivefin reports `ProductName: "Hivefin"` and its own version — fixtures may show Jellyfin product strings as reference only.
+Compatibility target: Jellyfin clients / `@jellyfin/sdk`. Hivefin advertises `ProductName: "Jellyfin Server"` and a compatibility `Version` (default `12.0.0`) for discovery scoring; `ServerName` stays `"Hivefin"`.
 
 ## Endpoints covered (Tier 0–2)
 

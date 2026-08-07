@@ -1,21 +1,22 @@
 defmodule HivefinWeb.Jellyfin.SystemControllerTest do
   use HivefinWeb.ConnCase
 
-  test "GET /System/Info/Public is unauthenticated", %{conn: conn} do
+  test "GET /System/Info/Public is unauthenticated with Jellyfin discovery identity", %{
+    conn: conn
+  } do
     conn = get(conn, ~p"/System/Info/Public")
 
     assert %{
              "ServerName" => "Hivefin",
-             "ProductName" => "Hivefin",
+             "ProductName" => "Jellyfin Server",
              "Version" => version,
              "Id" => id,
              "StartupWizardCompleted" => true
            } = json_response(conn, 200)
 
-    assert is_binary(version)
+    # jellyfin-vue / @jellyfin/sdk require ProductName exact match and Version >= API_VERSION
+    assert version == "12.0.0"
     assert is_binary(id)
-    # Do not impersonate Jellyfin product identity
-    refute version =~ ~r/jellyfin/i
   end
 
   test "GET /System/Info requires auth", %{conn: conn} do
@@ -49,9 +50,25 @@ defmodule HivefinWeb.Jellyfin.SystemControllerTest do
       |> get(~p"/System/Info")
 
     assert %{
-             "ProductName" => "Hivefin",
+             "ProductName" => "Jellyfin Server",
              "ServerName" => "Hivefin",
+             "Version" => "12.0.0",
              "Id" => _
            } = json_response(conn, 200)
+  end
+
+  test "GET /Branding/Configuration is public", %{conn: conn} do
+    conn = get(conn, ~p"/Branding/Configuration")
+
+    assert %{
+             "LoginDisclaimer" => "",
+             "CustomCss" => "",
+             "SplashscreenEnabled" => false
+           } = json_response(conn, 200)
+  end
+
+  test "GET /Users/Public returns empty list", %{conn: conn} do
+    conn = get(conn, ~p"/Users/Public")
+    assert json_response(conn, 200) == []
   end
 end

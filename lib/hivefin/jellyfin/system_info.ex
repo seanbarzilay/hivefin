@@ -2,21 +2,40 @@ defmodule Hivefin.Jellyfin.SystemInfo do
   @moduledoc """
   Server identity and System/Info payloads for Jellyfin clients.
 
-  ProductName is always "Hivefin" — we do not impersonate Jellyfin build hashes.
-  Version is the Hivefin application version.
+  Discovery (System/Info/Public) must satisfy @jellyfin/sdk RecommendedServerDiscovery:
+
+  - `ProductName` must be exactly `"Jellyfin Server"` (otherwise score BAD → "Server not found")
+  - `Version` must be >= the client's API_VERSION (currently 12.0.0 for jellyfin-vue)
+    or discovery rejects as outdated/unsupported
+
+  The real Mix app version is available via `hivefin_version/0` for ops/logging.
   """
 
   @default_server_id "00000000-0000-4000-8000-000000000001"
+  # Matches jellyfin-sdk-typescript API_VERSION used by recent jellyfin-vue builds.
+  @default_compatibility_version "12.0.0"
+  @discovery_product_name "Jellyfin Server"
 
   def server_id do
     Application.get_env(:hivefin, :server_id, @default_server_id)
   end
 
+  @doc """
+  Version advertised to clients (Jellyfin API compatibility claim).
+  """
   def version do
+    Application.get_env(:hivefin, :jellyfin_api_version, @default_compatibility_version)
+    |> to_string()
+  end
+
+  @doc """
+  Actual Hivefin OTP application version (not used for client discovery).
+  """
+  def hivefin_version do
     Application.spec(:hivefin, :vsn) |> to_string()
   end
 
-  def product_name, do: "Hivefin"
+  def product_name, do: @discovery_product_name
 
   def server_name do
     Application.get_env(:hivefin, :server_name, "Hivefin")
@@ -64,7 +83,6 @@ defmodule Hivefin.Jellyfin.SystemInfo do
       "CastReceiverApplications" => []
     })
   end
-
 
   defp default_local_address do
     "http://127.0.0.1:#{endpoint_port()}"

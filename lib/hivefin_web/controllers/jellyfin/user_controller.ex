@@ -50,6 +50,15 @@ defmodule HivefinWeb.Jellyfin.UserController do
     json(conn, Dto.User.from_user(user))
   end
 
+  @doc """
+  Public users list (unauthenticated). Hivefin has no public/anonymous users.
+  Jellyfin Vue calls this after discovery.
+  """
+  def public_users(conn, _params) do
+    json(conn, [])
+  end
+
+
   defp device_attrs_from_conn(conn) do
     header =
       case get_req_header(conn, "x-emby-authorization") do

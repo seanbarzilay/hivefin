@@ -2,7 +2,7 @@
 
 Target clients: **Jellyfin Web** and **official Jellyfin Android TV**, shapes aligned with Jellyfin **10.9.x**.
 
-Hivefin reports `ProductName: "Hivefin"` and its own app version — it does **not** impersonate Jellyfin build hashes.
+Discovery identity (required by `@jellyfin/sdk` / jellyfin-vue): `ProductName` is exactly `"Jellyfin Server"` and `Version` is a Jellyfin API compatibility string (default `12.0.0`). Display name remains `ServerName: "Hivefin"`. Real app version is `Hivefin.Jellyfin.SystemInfo.hivefin_version/0`.
 
 ## Live Android TV verification (operator)
 

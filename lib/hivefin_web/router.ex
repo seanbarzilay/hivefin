@@ -36,11 +36,14 @@ defmodule HivefinWeb.Router do
     pipe_through :jellyfin_api
 
     get "/System/Info/Public", SystemController, :public_info
+    get "/Branding/Configuration", BrandingController, :configuration
+    get "/Users/Public", UserController, :public_users
     post "/Users/AuthenticateByName", UserController, :authenticate_by_name
 
     pipe_through :jellyfin_auth
     get "/System/Info", SystemController, :info
     get "/Users/Me", UserController, :me
+
     get "/Users/:user_id/Views", ItemsController, :views
     # Resume before Items/:item_id so "Resume" is not captured as an id
     get "/Users/:user_id/Items/Resume", ItemsController, :resume
