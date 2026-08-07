@@ -24,12 +24,28 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   @doc "Required SessionInfoDto key names."
   def required_keys, do: Map.keys(@required)
 
+  # Properties jellyfin-sdk-kotlin declares on PlayerStateInfo with no default
+  # value — same MissingFieldException risk as @required above. Unlike
+  # SessionInfoDto, this nested object must be present on EVERY session, idle
+  # or not: jellyfin-web dereferences `PlayState.IsPaused` with no null guard
+  # on every Sessions push, so an idle session with no PlayState crashes the
+  # client's socket dispatch chain (the same chain the video player's events
+  # go through).
+  @play_state_required %{
+    "CanSeek" => false,
+    "IsPaused" => false,
+    "IsMuted" => false,
+    "RepeatMode" => "RepeatNone",
+    "PlaybackOrder" => "Default"
+  }
+
   @doc """
   Builds a SessionInfoDto from an `AccessToken` (user should be preloaded).
 
   `opts[:state]` is `%{item_id: String.t() | nil, position_ticks: integer() | nil,
-  is_paused: boolean()}`; when it resolves to an item, `NowPlayingItem` and
-  `PlayState` are included. Both are omitted when there is nothing playing.
+  is_paused: boolean()}`. `PlayState` is always present (idle values when there
+  is nothing playing). `NowPlayingItem` is included only when `item_id`
+  resolves to an item, and omitted otherwise.
   """
   def from_access_token(%AccessToken{} = at, opts \\ []) do
     user = at.user
@@ -75,21 +91,23 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   defp datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp datetime(_), do: nil
 
-  defp put_play_state(dto, nil), do: dto
-
-  defp put_play_state(dto, %{} = state) do
+  defp put_play_state(dto, state) do
+    state = state || %{}
     position = Map.get(state, :position_ticks)
     item_id = Map.get(state, :item_id)
+    paused = Map.get(state, :is_paused, false)
 
     dto
-    |> maybe_put("PlayState", play_state(position, Map.get(state, :is_paused, false)))
+    |> Map.put("PlayState", play_state(position, paused))
     |> maybe_put("NowPlayingItem", now_playing_item(item_id))
   end
 
-  defp play_state(nil, _paused), do: nil
+  defp play_state(nil, _paused), do: @play_state_required
 
   defp play_state(position, paused) when is_integer(position) do
-    %{"PositionTicks" => position, "IsPaused" => !!paused, "CanSeek" => true}
+    @play_state_required
+    |> Map.merge(%{"CanSeek" => true, "IsPaused" => !!paused})
+    |> Map.put("PositionTicks", position)
   end
 
   defp now_playing_item(nil), do: nil

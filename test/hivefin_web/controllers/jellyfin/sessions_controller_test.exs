@@ -12,6 +12,12 @@ defmodule HivefinWeb.Jellyfin.SessionsControllerTest do
 
   @movies_path Path.expand("test/support/fixtures/media_tree/movies", File.cwd!())
 
+  # Listed literally from jellyfin-sdk-kotlin PlayerStateInfo — same
+  # discipline as the SessionInfoDto required-key tests elsewhere in this
+  # suite. jellyfin-web dereferences `PlayState.IsPaused` with no null guard,
+  # so a session missing PlayState crashes the client's socket dispatch chain.
+  @play_state_required ~w(CanSeek IsPaused IsMuted RepeatMode PlaybackOrder)
+
   setup %{conn: conn} do
     {:ok, user} =
       Hivefin.Accounts.create_user(%{
@@ -118,5 +124,30 @@ defmodule HivefinWeb.Jellyfin.SessionsControllerTest do
 
   test "a user with no live socket gets an empty list, not a crash", %{conn: conn} do
     assert [] == conn |> get(~p"/Sessions") |> json_response(200)
+  end
+
+  test "GET /Sessions carries PlayState with all 5 required fields for an idle session", %{
+    conn: conn,
+    user: user,
+    access_token: access_token
+  } do
+    :ok = Hivefin.Sessions.register(access_token.id, %{user_id: user.id, device_id: "dev-rest"})
+
+    body = conn |> get(~p"/Sessions") |> json_response(200)
+    assert body != [], "expected the live session to be present"
+
+    session = Enum.find(body, &(&1["Id"] == Hivefin.Jellyfin.Id.format(access_token.id)))
+    assert session, "expected a session entry for the live socket"
+
+    play_state = session["PlayState"]
+    assert play_state, "expected PlayState to be present even when idle"
+
+    for key <- @play_state_required do
+      assert Map.has_key?(play_state, key), "PlayState missing #{key}"
+    end
+
+    assert play_state["CanSeek"] == false
+    assert play_state["IsPaused"] == false
+    refute Map.has_key?(session, "NowPlayingItem")
   end
 end

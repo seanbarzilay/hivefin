@@ -204,6 +204,39 @@ defmodule HivefinWeb.JellyfinSocketTest do
       SupportsMediaControl SupportsRemoteControl HasCustomDeviceName SupportedCommands
     )
 
+    # Listed literally from jellyfin-sdk-kotlin PlayerStateInfo — same
+    # discipline as @required_session_keys above. jellyfin-web dereferences
+    # `PlayState.IsPaused` with no null guard on every Sessions push, so an
+    # idle session missing PlayState crashes the socket dispatch chain (the
+    # same chain the video player's events go through).
+    @play_state_required ~w(CanSeek IsPaused IsMuted RepeatMode PlaybackOrder)
+
+    test "every idle session in a Sessions push still carries PlayState with all 5 required fields" do
+      s = persisted_state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      {:push, {:text, json}, _} =
+        JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+      sessions = Jason.decode!(json)["Data"]
+      assert sessions != [], "expected at least one session in the Sessions push"
+
+      for session <- sessions do
+        play_state = session["PlayState"]
+        assert play_state, "session #{session["Id"]} missing PlayState"
+
+        for key <- @play_state_required do
+          assert Map.has_key?(play_state, key), "PlayState missing #{key}"
+        end
+      end
+
+      mine = Enum.find(sessions, &(&1["Id"] == Hivefin.Jellyfin.Id.format(s.session_id)))
+      assert mine, "expected a session entry for #{s.session_id}"
+      assert mine["PlayState"]["CanSeek"] == false
+      assert mine["PlayState"]["IsPaused"] == false
+      refute Map.has_key?(mine, "NowPlayingItem")
+    end
+
     test "every session in a Sessions push carries the required fields" do
       s = persisted_state()
       {:push, _, s} = JellyfinSocket.init(s)

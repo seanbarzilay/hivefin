@@ -13,6 +13,11 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     SupportsMediaControl SupportsRemoteControl HasCustomDeviceName SupportedCommands
   )
 
+  # Listed literally from jellyfin-sdk-kotlin PlayerStateInfo — properties with
+  # no default value. A missing one raises MissingFieldException client-side
+  # and the whole session is discarded silently (same defect class as above).
+  @play_state_required ~w(CanSeek IsPaused IsMuted RepeatMode PlaybackOrder)
+
   setup do
     {:ok, user} =
       Hivefin.Accounts.create_user(%{
@@ -81,22 +86,58 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert dto["Id"] == Hivefin.Jellyfin.Id.format(at.id)
   end
 
-  test "omits NowPlayingItem when nothing is playing", %{access_token: at} do
+  # Regression test for the jellyfin-web crash: it dereferences
+  # `PlayState.IsPaused` unguarded on every Sessions push, so an idle session
+  # without PlayState throws inside the socket dispatch chain — which also
+  # carries the video player's events, so playback never starts in browser.
+  test "an idle session still carries PlayState with all 5 required fields", %{
+    access_token: at
+  } do
+    dto = SessionDto.from_access_token(at)
+    play_state = dto["PlayState"]
+
+    assert play_state, "expected PlayState to be present even when idle"
+
+    for key <- @play_state_required do
+      assert Map.has_key?(play_state, key), "PlayState missing required key #{key}"
+      refute is_nil(play_state[key]), "PlayState required key #{key} is null"
+    end
+
+    assert play_state["CanSeek"] == false
+    assert play_state["IsPaused"] == false
+    assert play_state["IsMuted"] == false
+    assert play_state["RepeatMode"] == "RepeatNone"
+    assert play_state["PlaybackOrder"] == "Default"
+    refute Map.has_key?(play_state, "PositionTicks")
+  end
+
+  test "omits NowPlayingItem when nothing is playing (NowPlayingItem only)", %{access_token: at} do
     dto = SessionDto.from_access_token(at)
 
     refute Map.has_key?(dto, "NowPlayingItem")
-    refute Map.has_key?(dto, "PlayState")
   end
 
-  test "includes PlayState when a position is known", %{access_token: at} do
+  test "includes PlayState with all 5 required fields plus PositionTicks when playing", %{
+    access_token: at
+  } do
     dto =
       SessionDto.from_access_token(at,
         state: %{item_id: nil, position_ticks: 500, is_paused: true}
       )
 
-    assert dto["PlayState"]["PositionTicks"] == 500
-    assert dto["PlayState"]["IsPaused"] == true
-    assert dto["PlayState"]["CanSeek"] == true
+    play_state = dto["PlayState"]
+
+    for key <- @play_state_required do
+      assert Map.has_key?(play_state, key), "PlayState missing required key #{key}"
+      refute is_nil(play_state[key]), "PlayState required key #{key} is null"
+    end
+
+    assert play_state["PositionTicks"] == 500
+    assert play_state["IsPaused"] == true
+    assert play_state["CanSeek"] == true
+    assert play_state["IsMuted"] == false
+    assert play_state["RepeatMode"] == "RepeatNone"
+    assert play_state["PlaybackOrder"] == "Default"
   end
 
   test "still carries every required field with state present", %{access_token: at} do
@@ -112,8 +153,9 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
   end
 
   # Minor 1: an all-nil state (exactly what stopped/2 records) must take the
-  # same omit-both-keys path as passing no state at all, not insert nulls.
-  test "omits NowPlayingItem/PlayState for an all-nil state (stopped/2 shape)", %{
+  # same omit-NowPlayingItem path as passing no state at all — but PlayState
+  # is still present (idle shape), never omitted.
+  test "omits NowPlayingItem for an all-nil state (stopped/2 shape); PlayState stays idle", %{
     access_token: at
   } do
     dto =
@@ -122,7 +164,9 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
       )
 
     refute Map.has_key?(dto, "NowPlayingItem")
-    refute Map.has_key?(dto, "PlayState")
+    assert dto["PlayState"]["CanSeek"] == false
+    assert dto["PlayState"]["IsPaused"] == false
+    refute Map.has_key?(dto["PlayState"], "PositionTicks")
   end
 
   # Important 2 + the dashless form clients actually send (Id.format strips
