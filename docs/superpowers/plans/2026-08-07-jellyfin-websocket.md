@@ -562,7 +562,7 @@ Outcome: a second client sees the first client's now-playing state, and every em
 - Consumes: `Phoenix.PubSub` (running as `Hivefin.PubSub`).
 - Produces:
   - `Hivefin.Sessions.register(session_id :: String.t(), attrs :: map()) :: :ok` — registers the **calling** process.
-  - `Hivefin.Sessions.update(session_id :: String.t(), attrs :: map()) :: :ok` — merges `attrs` into **the calling process's own** entry. `Registry.update_value/3` can only touch the caller's registration, so this is callable *only from the socket process*.
+  - `Hivefin.Sessions.update(session_id :: String.t(), attrs :: map()) :: :ok` — merges `attrs` into **the calling process's own** entry, and is a no-op when the caller has no registration for that session. Callable *only from the socket process*. Note `Registry.update_value/3` cannot be used: it raises `ArgumentError` on `{:duplicate, :pid}` registries.
   - `Hivefin.Sessions.put_state(session_id :: String.t(), attrs :: map()) :: :ok | {:error, :no_session}` — asks the socket process(es) for that session to apply `attrs` to their own entry, by sending `{:jellyfin_session_state, attrs}`. This is what request processes (controllers) must use; calling `update/2` from a controller would silently do nothing because the request process owns no registration.
   - `Hivefin.Sessions.list() :: [map()]` — every live session's attrs, each including `:session_id` and `:pid`.
   - `Hivefin.Sessions.pids(session_id :: String.t()) :: [pid()]`
@@ -767,13 +767,30 @@ defmodule Hivefin.Sessions do
   @doc """
   Merges `attrs` into **the calling process's own** entry.
 
-  `Registry.update_value/3` can only modify the caller's registration, so this
-  is callable only from the socket process itself. Request processes must use
-  `put_state/2`.
+  Callable only from the socket process itself; a process with no registration
+  for this session is a no-op. Request processes must use `put_state/2`.
   """
   def update(session_id, attrs) when is_binary(session_id) and is_map(attrs) do
-    Registry.update_value(@registry, session_id, &Map.merge(&1, attrs))
-    :ok
+    # Registry.update_value/3 raises ArgumentError on {:duplicate, :pid}
+    # registries, so replace the caller's own entry instead.
+    case Enum.filter(Registry.lookup(@registry, session_id), &(elem(&1, 0) == self())) do
+      [] ->
+        # No registration for this process: never insert one. A phantom entry
+        # here would make push/2 return :ok for a session with no socket, and
+        # silently outrank the real entry in a session list.
+        :ok
+
+      [{_pid, current} | _] ->
+        # ponytail: non-atomic replace — ~300ns window where a concurrent reader
+        # sees no entry. Measured p50 292ns / p99 2.4us, no yield point, and
+        # update/2 fires ~1/10s per playing session (~3e-7 exposure). Revisit
+        # (separate ETS table) only if update/2 becomes hot. Do NOT use
+        # Registry.unregister_match/3: ETS map patterns match subsets, so it
+        # deletes the new entry whenever the old value is a subset of the new.
+        Registry.unregister(@registry, session_id)
+        {:ok, _} = Registry.register(@registry, session_id, Map.merge(current, attrs))
+        :ok
+    end
   end
 
   @doc """
