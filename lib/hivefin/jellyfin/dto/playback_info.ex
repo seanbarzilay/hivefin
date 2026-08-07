@@ -22,7 +22,10 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   - `:base_url` — public origin (`http://host:port`) for absolute Path/StreamUrl
   """
   def build(%Item{} = item, %User{} = user, opts \\ []) do
-    profile =
+    stream_format = Keyword.get(opts, :stream_format, :hls)
+    base_url = opts |> Keyword.get(:base_url) |> normalize_base_url()
+
+    client_profile =
       case Keyword.get(opts, :device_profile) do
         %{} = p ->
           if Map.has_key?(p, :direct_play_containers) or Map.has_key?(p, "direct_play_containers") do
@@ -35,8 +38,12 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
           DeviceProfile.default()
       end
 
-    stream_format = Keyword.get(opts, :stream_format, :hls)
-    base_url = opts |> Keyword.get(:base_url) |> normalize_base_url()
+    # HTML5 / progressive clients must not honor ExoPlayer-style MKV DirectPlay.
+    profile =
+      case stream_format do
+        :progressive -> DeviceProfile.browser_html5()
+        _ -> client_profile
+      end
 
     sources =
       case Map.get(item, :media_sources) do

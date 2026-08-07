@@ -29,6 +29,21 @@ defmodule Hivefin.Playback.DeviceProfile do
   end
 
   @doc """
+  What a browser `<video>` element can actually progressive-play.
+
+  Android/official app DeviceProfiles allow MKV/HEVC for ExoPlayer, but the
+  embedded jellyfin-web player is HTML5 — DirectPlaying MKV never loads and
+  stalls at 00:00. Use this profile for jellyfin-web / progressive clients.
+  """
+  def browser_html5 do
+    %{
+      direct_play_containers: ~w(mp4 m4v webm mov),
+      video_codecs: ~w(h264 avc avc1 vp8 vp9 av1),
+      audio_codecs: ~w(aac mp3 opus vorbis flac)
+    }
+  end
+
+  @doc """
   Builds a profile from a PlaybackInfo request body map (string or atom keys).
 
   Accepts both flat bodies (`{"DeviceProfile": ...}`) and Jellyfin SDK shapes
