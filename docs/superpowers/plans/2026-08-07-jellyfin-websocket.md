@@ -17,6 +17,7 @@
 - Required fields (no default in the Kotlin SDK) MUST always be present and non-null. Missing keys raise `MissingFieldException` client-side and the message is discarded silently.
   - `ForceKeepAliveMessage`: `Data` (Int), `MessageId`
   - `SessionInfoDto`: `PlayableMediaTypes`, `UserId`, `LastActivityDate`, `LastPlaybackCheckIn`, `IsActive`, `SupportsMediaControl`, `SupportsRemoteControl`, `HasCustomDeviceName`, `SupportedCommands`
+  - `PlayerStateInfo` (`SessionInfoDto.PlayState`): `CanSeek`, `IsPaused`, `IsMuted`, `RepeatMode`, `PlaybackOrder`. `PlayState` is nullable-with-default on the SDK model, but hivefin emits it on **every** session, idle or not — jellyfin-web dereferences `PlayState.IsPaused` with no null guard on every `Sessions` push, so an absent `PlayState` throws inside the client's socket dispatch chain (the same chain the video player's events go through) and playback never starts in the browser. `NowPlayingItem` is the one that stays genuinely optional and is omitted when nothing is playing.
   - `PlayRequest`: `PlayCommand`, `ControllingUserId`
   - `PlaystateRequest`: `Command`
   - `GeneralCommand`: `Name`, `ControllingUserId`, `Arguments`
@@ -1284,21 +1285,28 @@ state that makes the `Sessions` push useful.
 **Interfaces:**
 - Consumes: `Hivefin.Sessions.put_state/2`, `Sessions.update/2`, `Sessions.broadcast_changed/0`, `Hivefin.Library.LibraryContext.get_item/1`, `Hivefin.Jellyfin.Dto.BaseItem.from_item/2`.
 - Produces:
-  - `Hivefin.Jellyfin.Dto.Session.from_access_token/2` gains a `:state` option: `%{item_id: String.t() | nil, position_ticks: integer() | nil, is_paused: boolean()}`. When `item_id` resolves to an item, the DTO includes `"NowPlayingItem"` (a `BaseItemDto`) and `"PlayState"` (`%{"PositionTicks" => …, "IsPaused" => …, "CanSeek" => true}`). Both keys are omitted when there is nothing playing — they are nullable-with-default in the SDK, so absence is safe.
+  - `Hivefin.Jellyfin.Dto.Session.from_access_token/2` gains a `:state` option: `%{item_id: String.t() | nil, position_ticks: integer() | nil, is_paused: boolean()}`. `"PlayState"` is **always** present: idle values (`CanSeek: false, IsPaused: false, IsMuted: false, RepeatMode: "RepeatNone", PlaybackOrder: "Default"`, `PositionTicks` omitted) when nothing is playing, or those same five fields plus `PositionTicks` and `CanSeek: true`/recorded `IsPaused` when a position is known. When `item_id` also resolves to an item, the DTO additionally includes `"NowPlayingItem"` (a `BaseItemDto`); it is the one key that is omitted when there is nothing playing.
 
-`NowPlayingItem` and `PlayState` are optional in `SessionInfoDto`; only the 9 required keys must always be present.
+`NowPlayingItem` is optional in `SessionInfoDto` and omitted when idle. `PlayState` is nullable-with-default in the SDK model, but must never actually be omitted: jellyfin-web's session-card renderer dereferences `PlayState.IsPaused` with no null guard, so an absent `PlayState` throws inside the socket message-dispatch chain on every `Sessions` push — the same chain the video player's events go through, so a missing `PlayState` means video playback never starts in the browser. `PlayerStateInfo`'s own 5 required fields (`CanSeek`, `IsPaused`, `IsMuted`, `RepeatMode`, `PlaybackOrder`) must always be present too, alongside the 9 required `SessionInfoDto` keys.
 
 - [ ] **Step 1: Write the failing test (append to session_test.exs)**
 
 ```elixir
-  test "omits NowPlayingItem when nothing is playing", %{access_token: at} do
+  test "an idle session still carries PlayState with all 5 required fields", %{access_token: at} do
     dto = SessionDto.from_access_token(at)
 
     refute Map.has_key?(dto, "NowPlayingItem")
-    refute Map.has_key?(dto, "PlayState")
+    assert dto["PlayState"]["CanSeek"] == false
+    assert dto["PlayState"]["IsPaused"] == false
+    assert dto["PlayState"]["IsMuted"] == false
+    assert dto["PlayState"]["RepeatMode"] == "RepeatNone"
+    assert dto["PlayState"]["PlaybackOrder"] == "Default"
+    refute Map.has_key?(dto["PlayState"], "PositionTicks")
   end
 
-  test "includes PlayState when a position is known", %{access_token: at} do
+  test "includes PlayState with all 5 required fields plus PositionTicks when playing", %{
+    access_token: at
+  } do
     dto =
       SessionDto.from_access_token(at,
         state: %{item_id: nil, position_ticks: 500, is_paused: true}
@@ -1307,6 +1315,9 @@ state that makes the `Sessions` push useful.
     assert dto["PlayState"]["PositionTicks"] == 500
     assert dto["PlayState"]["IsPaused"] == true
     assert dto["PlayState"]["CanSeek"] == true
+    assert dto["PlayState"]["IsMuted"] == false
+    assert dto["PlayState"]["RepeatMode"] == "RepeatNone"
+    assert dto["PlayState"]["PlaybackOrder"] == "Default"
   end
 
   test "still carries every required field with state present", %{access_token: at} do
@@ -1428,24 +1439,41 @@ and pipe the map through:
     |> put_play_state(state)
 ```
 
-with:
+with a `PlayerStateInfo` required-fields default map, mirroring the
+`@required` map already used for `SessionInfoDto`:
 
 ```elixir
-  defp put_play_state(dto, nil), do: dto
+  @play_state_required %{
+    "CanSeek" => false,
+    "IsPaused" => false,
+    "IsMuted" => false,
+    "RepeatMode" => "RepeatNone",
+    "PlaybackOrder" => "Default"
+  }
+```
 
-  defp put_play_state(dto, %{} = state) do
+`PlayState` must be present on every session — idle or not, since
+jellyfin-web dereferences `PlayState.IsPaused` with no null guard on every
+`Sessions` push. Only `NowPlayingItem` is genuinely optional:
+
+```elixir
+  defp put_play_state(dto, state) do
+    state = state || %{}
     position = Map.get(state, :position_ticks)
     item_id = Map.get(state, :item_id)
+    paused = Map.get(state, :is_paused, false)
 
     dto
-    |> maybe_put("PlayState", play_state(position, Map.get(state, :is_paused, false)))
+    |> Map.put("PlayState", play_state(position, paused))
     |> maybe_put("NowPlayingItem", now_playing_item(item_id))
   end
 
-  defp play_state(nil, _paused), do: nil
+  defp play_state(nil, _paused), do: @play_state_required
 
   defp play_state(position, paused) when is_integer(position) do
-    %{"PositionTicks" => position, "IsPaused" => !!paused, "CanSeek" => true}
+    @play_state_required
+    |> Map.merge(%{"CanSeek" => true, "IsPaused" => !!paused})
+    |> Map.put("PositionTicks", position)
   end
 
   defp now_playing_item(nil), do: nil

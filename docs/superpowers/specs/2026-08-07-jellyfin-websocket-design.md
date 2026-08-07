@@ -61,11 +61,24 @@ below is built through the same discipline.
 |---------|----------------|
 | `ForceKeepAliveMessage` | `Data` (Int), `MessageId` |
 | `SessionInfoDto` | `PlayableMediaTypes`, `UserId`, `LastActivityDate`, `LastPlaybackCheckIn`, `IsActive`, `SupportsMediaControl`, `SupportsRemoteControl`, `HasCustomDeviceName`, `SupportedCommands` |
+| `PlayerStateInfo` (`SessionInfoDto.PlayState`) | `CanSeek`, `IsPaused`, `IsMuted`, `RepeatMode`, `PlaybackOrder` |
 | `PlayRequest` | `PlayCommand`, `ControllingUserId` |
 | `PlaystateRequest` | `Command` |
 | `GeneralCommand` | `Name`, `ControllingUserId`, `Arguments` (all three) |
 
 `Dto.Session` currently omits `LastPlaybackCheckIn`. Stage 2 adds it.
+
+`PlayState` itself is optional on `SessionInfoDto` (nullable-with-default), but
+**hivefin always emits it**, idle or not: idle sessions get
+`CanSeek: false, IsPaused: false, IsMuted: false, RepeatMode: "RepeatNone",
+PlaybackOrder: "Default"` with `PositionTicks` omitted. This is not optional in
+practice — jellyfin-web's session-card renderer dereferences
+`PlayState.IsPaused` with **no null guard**, so a session with `PlayState`
+entirely absent throws inside the socket message-dispatch chain on every
+`Sessions` push, which is the same chain the video player's own events go
+through; the practical effect is that video playback never starts in the
+browser. `NowPlayingItem` is the only one of the two that stays genuinely
+optional and is omitted when nothing is playing.
 
 ### 2.2 Enums
 
