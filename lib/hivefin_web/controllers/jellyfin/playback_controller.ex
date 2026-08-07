@@ -23,7 +23,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
         response =
           PlaybackInfo.build(item, conn.assigns.current_user,
             device_profile: profile,
-            stream_format: stream_format_for_conn(conn),
+            browser_safe: browser_safe_client?(conn),
             base_url: request_base_url(conn),
             play_session_id:
               params["PlaySessionId"] ||
@@ -40,25 +40,23 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
     Map.drop(params, ["item_id", "id"])
   end
 
-  # jellyfin-web (incl. official Android WebView) plays progressive MP4 natively.
-  # jellyfin-vue always feeds non-DirectPlay into hls.js and needs HLS.
-  defp stream_format_for_conn(conn) do
+  # jellyfin-web / Android WebView use HTML5 (+ hls.js). Ignore ExoPlayer MKV profiles.
+  # jellyfin-vue keeps the client DeviceProfile as-is.
+  defp browser_safe_client?(conn) do
+    client = client_name(conn)
+    not String.contains?(client, "vue")
+  end
+
+  defp client_name(conn) do
     header =
       case get_req_header(conn, "x-emby-authorization") do
         [h | _] -> h
         [] -> List.first(get_req_header(conn, "authorization")) || ""
       end
 
-    client =
-      case Regex.run(~r/Client="([^"]*)"/i, header || "") do
-        [_, c] -> String.downcase(c)
-        _ -> ""
-      end
-
-    cond do
-      String.contains?(client, "vue") -> :hls
-      # Default progressive for unknown mobile/web clients — they never request HLS.
-      true -> :progressive
+    case Regex.run(~r/Client="([^"]*)"/i, header || "") do
+      [_, c] -> String.downcase(c)
+      _ -> ""
     end
   end
 

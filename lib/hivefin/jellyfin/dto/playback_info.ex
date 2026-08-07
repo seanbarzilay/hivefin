@@ -18,11 +18,12 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   ## Options
   - `:device_profile` — normalized profile or raw Jellyfin DeviceProfile map
   - `:play_session_id` — optional; generated if omitted
-  - `:stream_format` — `:hls` (jellyfin-vue) or `:progressive` (jellyfin-web)
-  - `:base_url` — public origin (`http://host:port`) for absolute Path/StreamUrl
+  - `:browser_safe` — when true, ignore ExoPlayer MKV profiles; use HTML5-safe
+    DirectPlay rules and HLS for remux/transcode
+  - `:base_url` — public origin for absolute StreamUrl helpers
   """
   def build(%Item{} = item, %User{} = user, opts \\ []) do
-    stream_format = Keyword.get(opts, :stream_format, :hls)
+    browser_safe? = Keyword.get(opts, :browser_safe, false)
     base_url = opts |> Keyword.get(:base_url) |> normalize_base_url()
 
     client_profile =
@@ -38,12 +39,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
           DeviceProfile.default()
       end
 
-    # HTML5 / progressive clients must not honor ExoPlayer-style MKV DirectPlay.
-    profile =
-      case stream_format do
-        :progressive -> DeviceProfile.browser_html5()
-        _ -> client_profile
-      end
+    # HTML5 must not honor Android ExoPlayer MKV/HEVC DirectPlay profiles.
+    profile = if browser_safe?, do: DeviceProfile.browser_html5(), else: client_profile
 
     sources =
       case Map.get(item, :media_sources) do
@@ -56,7 +53,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
 
     media_sources =
       Enum.map(sources, fn source ->
-        from_media_source(source, item, user, profile, play_session_id, stream_format, base_url)
+        from_media_source(source, item, user, profile, play_session_id, base_url)
       end)
 
     %{
@@ -71,22 +68,9 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
          %User{} = user,
          profile,
          play_session_id,
-         stream_format,
          base_url
        ) do
     {method, meta} = Decision.choose(source, profile)
-
-    # Progressive HTML5: remuxed fMP4 from MKV is flaky (timestamps, codecs).
-    # Always re-encode to clean h264/aac fMP4 when not already DirectPlay-safe.
-    {method, meta} =
-      case {stream_format, method} do
-        {:progressive, :direct_stream} ->
-          {:transcode, Map.put(meta, :reason, :browser_progressive_transcode)}
-
-        _ ->
-          {method, meta}
-      end
-
     token = StreamToken.sign(user.id, item.id, source.id)
 
     streams =
@@ -133,11 +117,11 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     }
 
     base
-    |> put_play_method(method, item.id, source.id, token, play_session_id, meta, stream_format, base_url)
+    |> put_play_method(method, item.id, source.id, token, play_session_id, meta, base_url)
     |> drop_nils()
   end
 
-  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta, _fmt, base_url) do
+  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta, base_url) do
     rel = direct_stream_url(item_id, item_id, token, static: true)
     _ = source_id
 
@@ -147,6 +131,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => rel,
       "StreamUrl" => absolutize(base_url, rel),
+      # Only set Path for true DirectPlay of browser-safe files.
       "Path" => absolutize(base_url, rel),
       "TranscodingUrl" => nil,
       "TranscodingSubProtocol" => nil,
@@ -155,47 +140,21 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     })
   end
 
-  defp put_play_method(base, method, item_id, source_id, token, session, _meta, stream_format, base_url)
+  defp put_play_method(base, method, item_id, source_id, token, session, _meta, base_url)
        when method in [:direct_stream, :transcode] do
     _ = source_id
-    transcode? = method == :transcode
-    non_direct_play_urls(base, item_id, token, session, stream_format, base_url, transcode?: transcode?)
-  end
-
-  # Progressive for jellyfin-web: advertise as DirectPlay of an HTTP progressive
-  # MP4 so native <video> sets src=Path (absolute). HLS path often never fetches
-  # in the official Android WebView shell.
-  defp non_direct_play_urls(base, item_id, token, session, :progressive, base_url, opts) do
-    rel = progressive_url(item_id, item_id, token, session, opts)
-    abs = absolutize(base_url, rel)
-
-    Map.merge(base, %{
-      # Lie: "DirectPlay" the transcoded progressive URL so Path is used as src.
-      "SupportsDirectPlay" => true,
-      "SupportsDirectStream" => true,
-      "SupportsTranscoding" => true,
-      "Container" => "mp4",
-      "Path" => abs,
-      "StreamUrl" => abs,
-      "DirectStreamUrl" => rel,
-      "TranscodingUrl" => rel,
-      "TranscodingSubProtocol" => "http",
-      "TranscodingContainer" => "mp4",
-      "IsRemote" => false
-    })
-  end
-
-  defp non_direct_play_urls(base, item_id, token, session, _hls, base_url, opts) do
-    rel = hls_url(item_id, item_id, token, session, opts)
-    abs = absolutize(base_url, rel)
+    # Always HLS for remux/transcode. Progressive fMP4 is aborted by browsers
+    # after ~1s (range probes / incomplete timeline) — broken pipe in FFmpeg.
+    rel = hls_url(item_id, item_id, token, session, transcode?: method == :transcode)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
       "SupportsDirectStream" => false,
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => nil,
-      "StreamUrl" => abs,
-      "Path" => abs,
+      # Do not put m3u8 in Path — DirectPlay Path is for progressive files only.
+      "Path" => nil,
+      "StreamUrl" => absolutize(base_url, rel),
       "TranscodingUrl" => rel,
       "TranscodingSubProtocol" => "hls",
       "TranscodingContainer" => "ts",
@@ -209,14 +168,6 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     media_source_id = Id.format(media_source_id)
 
     "/Videos/#{path_id}/stream?MediaSourceId=#{encode(media_source_id)}&Static=#{static}&api_key=#{encode(token)}"
-  end
-
-  defp progressive_url(item_id, media_source_id, token, session, opts) do
-    item_id = Id.format(item_id)
-    media_source_id = Id.format(media_source_id)
-    transcode = if Keyword.get(opts, :transcode?, false), do: "&Transcode=true", else: ""
-
-    "/Videos/#{item_id}/stream.mp4?MediaSourceId=#{encode(media_source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
   end
 
   defp hls_url(item_id, media_source_id, token, session, opts) do
