@@ -1833,10 +1833,8 @@ Add to `lib/hivefin_web/controllers/jellyfin/sessions_controller.ex`, and add
 
 - [ ] **Step 3b: Add the routes**
 
-In `lib/hivefin_web/router.ex`, next to the existing `/Sessions` routes (around
-lines 157-162), add. Order matters: the two-segment `Playing` route must come
-before the three-segment `Playing/:command` route is unreachable — Phoenix
-matches on segment count, so both are needed explicitly:
+In `lib/hivefin_web/router.ex`, add these next to the existing `/Sessions`
+routes (around lines 157-162):
 
 ```elixir
     post "/Sessions/:session_id/Playing", SessionsController, :play
@@ -1956,24 +1954,46 @@ In `lib/hivefin/jellyfin/dto/session.ex`:
   @doc "GeneralCommandType values hivefin can actually deliver."
   def supported_commands, do: @supported_commands
 
-  # Signature already widened to /2 in Task 7; this adds the :controllable option.
-  def from_access_token(%AccessToken{} = at, opts \\ []) do
+The signature is already `/2` from Task 7. Add two bindings at the top of the
+function body:
+
+```elixir
     controllable? = Keyword.get(opts, :controllable, false)
     commands = if controllable?, do: @supported_commands, else: []
-    # ... existing body, with these keys replaced:
-    #   "SupportsMediaControl" => controllable?,
-    #   "SupportsRemoteControl" => controllable?,
-    #   "SupportedCommands" => commands,
-    #   "Capabilities" => %{
-    #     "PlayableMediaTypes" => ["Video"],
-    #     "SupportedCommands" => commands,
-    #     "SupportsMediaControl" => controllable?,
-    #     "SupportsPersistentIdentifier" => true
-    #   }
-  end
 ```
 
-Apply those four replacements inside the existing map literal.
+Then change exactly these four entries in the existing map literal. Before:
+
+```elixir
+      "SupportsMediaControl" => false,
+      "SupportsRemoteControl" => false,
+      "SupportedCommands" => [],
+      "Capabilities" => %{
+        "PlayableMediaTypes" => ["Video"],
+        "SupportedCommands" => [],
+        "SupportsMediaControl" => false,
+        "SupportsPersistentIdentifier" => true
+      }
+```
+
+After:
+
+```elixir
+      "SupportsMediaControl" => controllable?,
+      "SupportsRemoteControl" => controllable?,
+      "SupportedCommands" => commands,
+      "Capabilities" => %{
+        "PlayableMediaTypes" => ["Video"],
+        "SupportedCommands" => commands,
+        "SupportsMediaControl" => controllable?,
+        "SupportsPersistentIdentifier" => true
+      }
+```
+
+Leave every other key in the map untouched. Note the `@required` defaults map
+still carries `"SupportsMediaControl" => false` and `"SupportedCommands" => []`
+— that is correct: it only fills keys that are absent or nil, and these are
+always present, so the explicit values above win.
 
 - [ ] **Step 3b: Mark registered sockets controllable**
 
