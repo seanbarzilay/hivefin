@@ -182,5 +182,20 @@ defmodule HivefinWeb.JellyfinSocketTest do
         refute is_nil(session[key]), "SessionInfoDto #{key} is null"
       end
     end
+
+    test "a session_state message updates the registry entry" do
+      s = state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      assert {:ok, ^s} =
+               JellyfinSocket.handle_info(
+                 {:jellyfin_session_state, %{position_ticks: 999, is_paused: true}},
+                 s
+               )
+
+      entry = Enum.find(Hivefin.Sessions.list(), &(&1.session_id == s.session_id))
+      assert entry.position_ticks == 999
+      assert entry.is_paused == true
+    end
   end
 end

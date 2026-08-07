@@ -8,6 +8,7 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   alias Hivefin.Accounts
   alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
   alias Hivefin.Library.{LibraryContext, UserData}
+  alias Hivefin.Sessions
 
   # Jellyfin-compatible: past this fraction of runtime, treat as finished
   # (clears resume / shows watched). Vue only sends PositionTicks, never Played.
@@ -49,6 +50,12 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   `POST /Sessions/Playing` — client started playback.
   """
   def playing(conn, params) do
+    record_session_state(conn, %{
+      item_id: params["ItemId"],
+      position_ticks: params["PositionTicks"],
+      is_paused: false
+    })
+
     report(conn, params, :playing)
   end
 
@@ -56,6 +63,12 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   `POST /Sessions/Playing/Progress` — periodic progress.
   """
   def progress(conn, params) do
+    record_session_state(conn, %{
+      item_id: params["ItemId"],
+      position_ticks: params["PositionTicks"],
+      is_paused: !!params["IsPaused"]
+    })
+
     report(conn, params, :progress)
   end
 
@@ -63,6 +76,7 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   `POST /Sessions/Playing/Stopped` — client stopped playback.
   """
   def stopped(conn, params) do
+    record_session_state(conn, %{item_id: nil, position_ticks: nil, is_paused: false})
     report(conn, params, :stopped)
   end
 
@@ -113,6 +127,17 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
       |> put_status(:forbidden)
       |> json(%{"error" => "forbidden"})
     end
+  end
+
+  # Records now-playing state on the caller's own session so other clients can
+  # see it. put_state/2 (not update/2) because this runs in a request process.
+  defp record_session_state(conn, attrs) do
+    case conn.assigns[:current_access_token] do
+      %{id: session_id} -> Sessions.put_state(session_id, attrs)
+      _ -> :ok
+    end
+
+    :ok
   end
 
   defp report(conn, params, _kind) do
@@ -210,7 +235,6 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
     Hivefin.Jellyfin.Id.coerce(conn.assigns.current_user.id) ==
       Hivefin.Jellyfin.Id.coerce(user_id)
   end
-
 
   defp user_data_attrs_from_body(params) do
     %{

@@ -54,4 +54,34 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
 
     assert dto["Id"] == Hivefin.Jellyfin.Id.format(at.id)
   end
+
+  test "omits NowPlayingItem when nothing is playing", %{access_token: at} do
+    dto = SessionDto.from_access_token(at)
+
+    refute Map.has_key?(dto, "NowPlayingItem")
+    refute Map.has_key?(dto, "PlayState")
+  end
+
+  test "includes PlayState when a position is known", %{access_token: at} do
+    dto =
+      SessionDto.from_access_token(at,
+        state: %{item_id: nil, position_ticks: 500, is_paused: true}
+      )
+
+    assert dto["PlayState"]["PositionTicks"] == 500
+    assert dto["PlayState"]["IsPaused"] == true
+    assert dto["PlayState"]["CanSeek"] == true
+  end
+
+  test "still carries every required field with state present", %{access_token: at} do
+    dto =
+      SessionDto.from_access_token(at,
+        state: %{item_id: nil, position_ticks: 1, is_paused: false}
+      )
+
+    for key <- @required do
+      assert Map.has_key?(dto, key), "missing #{key}"
+      refute is_nil(dto[key]), "#{key} is null"
+    end
+  end
 end

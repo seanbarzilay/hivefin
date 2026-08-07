@@ -26,10 +26,15 @@ defmodule Hivefin.Jellyfin.Dto.Session do
 
   @doc """
   Builds a SessionInfoDto from an `AccessToken` (user should be preloaded).
+
+  `opts[:state]` is `%{item_id: String.t() | nil, position_ticks: integer() | nil,
+  is_paused: boolean()}`; when it resolves to an item, `NowPlayingItem` and
+  `PlayState` are included. Both are omitted when there is nothing playing.
   """
-  def from_access_token(%AccessToken{} = at) do
+  def from_access_token(%AccessToken{} = at, opts \\ []) do
     user = at.user
     last_activity = datetime(at.updated_at || at.inserted_at) || now()
+    state = Keyword.get(opts, :state)
 
     %{
       "Id" => Hivefin.Jellyfin.Id.format(at.id),
@@ -56,6 +61,7 @@ defmodule Hivefin.Jellyfin.Dto.Session do
       }
     }
     |> then(&Map.merge(@required, drop_nils(&1)))
+    |> put_play_state(state)
   end
 
   defp drop_nils(map), do: map |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
@@ -68,4 +74,33 @@ defmodule Hivefin.Jellyfin.Dto.Session do
 
   defp datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp datetime(_), do: nil
+
+  defp put_play_state(dto, nil), do: dto
+
+  defp put_play_state(dto, %{} = state) do
+    position = Map.get(state, :position_ticks)
+    item_id = Map.get(state, :item_id)
+
+    dto
+    |> maybe_put("PlayState", play_state(position, Map.get(state, :is_paused, false)))
+    |> maybe_put("NowPlayingItem", now_playing_item(item_id))
+  end
+
+  defp play_state(nil, _paused), do: nil
+
+  defp play_state(position, paused) when is_integer(position) do
+    %{"PositionTicks" => position, "IsPaused" => !!paused, "CanSeek" => true}
+  end
+
+  defp now_playing_item(nil), do: nil
+
+  defp now_playing_item(item_id) when is_binary(item_id) do
+    case Hivefin.Library.LibraryContext.get_item(item_id) do
+      nil -> nil
+      item -> Hivefin.Jellyfin.Dto.BaseItem.from_item(item)
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

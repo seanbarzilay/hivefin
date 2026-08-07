@@ -71,6 +71,13 @@ defmodule HivefinWeb.JellyfinSocket do
     end
   end
 
+  def handle_info({:jellyfin_session_state, attrs}, state) do
+    # Registry entries are caller-owned, so the socket applies its own update.
+    Sessions.update(state.session_id, attrs)
+    Sessions.broadcast_changed()
+    {:ok, state}
+  end
+
   def handle_info(_message, state), do: {:ok, state}
 
   @impl WebSock
@@ -100,11 +107,25 @@ defmodule HivefinWeb.JellyfinSocket do
   end
 
   defp sessions_message(state) do
+    live = Map.new(Sessions.list(), &{&1.session_id, &1})
+
     sessions =
       [user_id: state.user_id]
       |> Accounts.list_access_tokens()
-      |> Enum.map(&SessionDto.from_access_token/1)
+      |> Enum.map(fn at ->
+        SessionDto.from_access_token(at, state: session_state(live[at.id]))
+      end)
 
     WsMessage.encode("Sessions", sessions)
+  end
+
+  defp session_state(nil), do: nil
+
+  defp session_state(entry) do
+    %{
+      item_id: Map.get(entry, :item_id),
+      position_ticks: Map.get(entry, :position_ticks),
+      is_paused: Map.get(entry, :is_paused, false)
+    }
   end
 end
