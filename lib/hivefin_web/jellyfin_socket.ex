@@ -11,7 +11,6 @@ defmodule HivefinWeb.JellyfinSocket do
 
   require Logger
 
-  alias Hivefin.Accounts
   alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
   alias Hivefin.Jellyfin.WsMessage
   alias Hivefin.Sessions
@@ -107,25 +106,11 @@ defmodule HivefinWeb.JellyfinSocket do
   end
 
   defp sessions_message(state) do
-    live = Map.new(Sessions.list(), &{&1.session_id, &1})
-
     sessions =
-      [user_id: state.user_id]
-      |> Accounts.list_access_tokens()
-      |> Enum.map(fn at ->
-        SessionDto.from_access_token(at, state: session_state(live[at.id]))
-      end)
+      state.user_id
+      |> Sessions.live_for_user()
+      |> Enum.map(fn {at, play_state} -> SessionDto.from_access_token(at, state: play_state) end)
 
     WsMessage.encode("Sessions", sessions)
-  end
-
-  defp session_state(nil), do: nil
-
-  defp session_state(entry) do
-    %{
-      item_id: Map.get(entry, :item_id),
-      position_ticks: Map.get(entry, :position_ticks),
-      is_paused: Map.get(entry, :is_paused, false)
-    }
   end
 end

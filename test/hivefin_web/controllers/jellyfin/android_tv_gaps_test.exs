@@ -61,6 +61,11 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     user: user,
     access_token: access_token
   } do
+    # GET /Sessions now reports only sessions with a live socket; conn
+    # requests run synchronously in the test process, so registering it as
+    # the "socket" for this access token is enough to make it live.
+    :ok = Hivefin.Sessions.register(access_token.id, %{user_id: user.id})
+
     conn = get(conn, ~p"/Sessions")
     body = json_response(conn, 200)
 
@@ -79,7 +84,13 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     assert is_map(session["Capabilities"])
   end
 
-  test "GET /Sessions?deviceId= filters sessions", %{conn: conn, access_token: access_token} do
+  test "GET /Sessions?deviceId= filters sessions", %{
+    conn: conn,
+    user: user,
+    access_token: access_token
+  } do
+    :ok = Hivefin.Sessions.register(access_token.id, %{user_id: user.id})
+
     conn = get(conn, ~p"/Sessions", %{"deviceId" => "androidtv-1"})
     body = json_response(conn, 200)
 
@@ -92,6 +103,8 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     user: user,
     access_token: access_token
   } do
+    :ok = Hivefin.Sessions.register(access_token.id, %{user_id: user.id})
+
     {:ok, other} =
       Hivefin.Accounts.create_user(%{
         name: "Other",

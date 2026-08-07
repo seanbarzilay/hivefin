@@ -66,7 +66,8 @@ defmodule HivefinWeb.JellyfinSocketTest do
       user_id: user.id,
       session_id: at.id,
       device_id: "dev-#{n}",
-      subscriptions: MapSet.new()
+      subscriptions: MapSet.new(),
+      user: user
     }
   end
 
@@ -195,6 +196,14 @@ defmodule HivefinWeb.JellyfinSocketTest do
       assert Jason.decode!(json)["MessageType"] == "Sessions"
     end
 
+    # Listed literally (not via Dto.Session.required_keys/0) so this test can
+    # actually catch a regression in the required-keys list itself, not just
+    # in whether sessions_message/1 applies it.
+    @required_session_keys ~w(
+      PlayableMediaTypes UserId LastActivityDate LastPlaybackCheckIn IsActive
+      SupportsMediaControl SupportsRemoteControl HasCustomDeviceName SupportedCommands
+    )
+
     test "every session in a Sessions push carries the required fields" do
       s = persisted_state()
       {:push, _, s} = JellyfinSocket.init(s)
@@ -206,10 +215,71 @@ defmodule HivefinWeb.JellyfinSocketTest do
       # Without this the for-loop below can pass vacuously on an empty list.
       assert sessions != [], "expected at least one session in the Sessions push"
 
-      for session <- sessions, key <- Hivefin.Jellyfin.Dto.Session.required_keys() do
+      for session <- sessions, key <- @required_session_keys do
         assert Map.has_key?(session, key), "SessionInfoDto missing #{key}"
         refute is_nil(session[key]), "SessionInfoDto #{key} is null"
       end
+    end
+
+    test "sessions_message excludes an access token with no live socket" do
+      s = persisted_state()
+
+      # A second access token for the same user that never opens a socket —
+      # exactly the "146 dead rows" shape from the production regression.
+      {:ok, _dead_token, dead_at} =
+        Hivefin.Accounts.issue_token(s.user, %{
+          device_id: "dead-device",
+          device_name: "Dead",
+          client: "Old Client",
+          client_version: "1.0"
+        })
+
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      {:push, {:text, json}, _} =
+        JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+      ids = Jason.decode!(json)["Data"] |> Enum.map(& &1["Id"])
+      assert ids != [], "expected at least one live session in the Sessions push"
+
+      assert Hivefin.Jellyfin.Id.format(s.session_id) in ids
+      refute Hivefin.Jellyfin.Id.format(dead_at.id) in ids
+    end
+
+    test "duplicate registry entries for one session_id yield exactly one payload entry" do
+      s = persisted_state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      test_pid = self()
+
+      dup =
+        spawn(fn ->
+          :ok =
+            Hivefin.Sessions.register(s.session_id, %{
+              user_id: s.user_id,
+              device_id: s.device_id
+            })
+
+          send(test_pid, :dup_registered)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :dup_registered
+      assert length(Hivefin.Sessions.pids(s.session_id)) == 2
+
+      {:push, {:text, json}, _} =
+        JellyfinSocket.handle_in(frame(%{"MessageType" => "SessionsStart"}), s)
+
+      sessions = Jason.decode!(json)["Data"]
+      assert sessions != [], "expected at least one session in the Sessions push"
+
+      matches =
+        Enum.filter(sessions, &(&1["Id"] == Hivefin.Jellyfin.Id.format(s.session_id)))
+
+      assert length(matches) == 1,
+             "expected exactly one entry for a duplicated session_id, got #{length(matches)}"
+
+      Process.exit(dup, :kill)
     end
 
     test "a session_state message updates the registry entry" do

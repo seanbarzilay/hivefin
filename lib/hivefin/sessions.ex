@@ -10,6 +10,8 @@ defmodule Hivefin.Sessions do
   socket process has terminated must not crash on register.
   """
 
+  alias Hivefin.Accounts
+
   @registry Hivefin.Sessions.Registry
   @topic "jellyfin:sessions"
 
@@ -96,4 +98,42 @@ defmodule Hivefin.Sessions do
 
   @doc "Notifies subscribers that the session list or its state changed."
   def broadcast_changed, do: Phoenix.PubSub.broadcast(Hivefin.PubSub, @topic, :sessions_changed)
+
+  @doc """
+  Access tokens for `user_id` that currently hold a live socket, each paired
+  with its play state (`t:Dto.Session.from_access_token/2`'s `:state` opt).
+
+  Single source of truth for "what is a session" — both `GET /Sessions` and
+  the Sessions websocket push build their payload from this, so they can't
+  drift. Without it, every access token ever issued (mostly dead rows from
+  past logins) gets reported as a session; on the live server that was 147
+  "sessions" for 1 real playback.
+
+  `opts[:device_id]` filters like `Accounts.list_access_tokens/1` does.
+
+  Registry keys are duplicate on purpose (a reconnecting client may briefly
+  hold two sockets for the same session_id) — collapsed here so a session
+  appears at most once.
+  """
+  def live_for_user(user_id, opts \\ []) do
+    device_id = Keyword.get(opts, :device_id)
+
+    live_by_session_id =
+      list()
+      |> Enum.uniq_by(& &1.session_id)
+      |> Map.new(&{&1.session_id, &1})
+
+    [user_id: user_id, device_id: device_id]
+    |> Accounts.list_access_tokens()
+    |> Enum.filter(&Map.has_key?(live_by_session_id, &1.id))
+    |> Enum.map(&{&1, play_state(live_by_session_id[&1.id])})
+  end
+
+  defp play_state(entry) do
+    %{
+      item_id: Map.get(entry, :item_id),
+      position_ticks: Map.get(entry, :position_ticks),
+      is_paused: Map.get(entry, :is_paused, false)
+    }
+  end
 end

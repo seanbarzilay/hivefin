@@ -5,7 +5,6 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
 
   use HivefinWeb, :controller
 
-  alias Hivefin.Accounts
   alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
   alias Hivefin.Library.{LibraryContext, UserData}
   alias Hivefin.Sessions
@@ -15,15 +14,17 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   @completion_ratio 0.90
 
   @doc """
-  `GET /Sessions` — active device sessions for the current user (access tokens).
+  `GET /Sessions` — live device sessions for the current user (only access
+  tokens that currently hold a websocket, matching the Sessions socket push).
   """
   def index(conn, params) do
     device_id = blank_to_nil(params["deviceId"] || params["DeviceId"])
     user = conn.assigns.current_user
 
     sessions =
-      Accounts.list_access_tokens(user_id: user.id, device_id: device_id)
-      |> Enum.map(&SessionDto.from_access_token/1)
+      user.id
+      |> Sessions.live_for_user(device_id: device_id)
+      |> Enum.map(fn {at, play_state} -> SessionDto.from_access_token(at, state: play_state) end)
 
     json(conn, sessions)
   end
