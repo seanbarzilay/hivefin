@@ -30,14 +30,35 @@ defmodule Hivefin.Playback.DeviceProfile do
 
   @doc """
   Builds a profile from a PlaybackInfo request body map (string or atom keys).
+
+  Accepts both flat bodies (`{"DeviceProfile": ...}`) and Jellyfin SDK shapes
+  (`{"playbackInfoDto": {"DeviceProfile": ...}}`). Mis-parsing used to fall
+  through to `default/0`, which DirectPlays MKV — wrong for web clients that
+  sent a restrictive profile nested under `playbackInfoDto`.
   """
   def from_playback_info_body(body) when is_map(body) do
     body
-    |> get_key(["DeviceProfile", "deviceProfile", :DeviceProfile, :deviceProfile])
+    |> extract_device_profile()
     |> from_jellyfin()
   end
 
   def from_playback_info_body(_), do: default()
+
+  defp extract_device_profile(body) when is_map(body) do
+    get_key(body, ["DeviceProfile", "deviceProfile", :DeviceProfile, :deviceProfile]) ||
+      nested_device_profile(body, ["playbackInfoDto", "PlaybackInfoDto", :playbackInfoDto]) ||
+      nested_device_profile(body, ["dto", "Dto"])
+  end
+
+  defp nested_device_profile(body, wrapper_keys) do
+    case get_key(body, wrapper_keys) do
+      %{} = inner ->
+        get_key(inner, ["DeviceProfile", "deviceProfile", :DeviceProfile, :deviceProfile])
+
+      _ ->
+        nil
+    end
+  end
 
   @doc """
   Parses a Jellyfin DeviceProfile map into `t()`. Falls back to `default/0`.

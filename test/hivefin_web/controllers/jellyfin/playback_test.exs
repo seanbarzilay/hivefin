@@ -317,6 +317,38 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     Hivefin.Playback.Session.stop(hold)
   end
 
+
+  test "PlaybackInfo respects nested playbackInfoDto.DeviceProfile (SDK shape)", %{
+    conn: conn,
+    movie: movie
+  } do
+    # Restrictive profile nested under playbackInfoDto — must NOT fall back to
+    # default (which DirectPlays mkv) or the fixture mp4 would DirectPlay wrongly
+    # when the client only allows hevc (forcing transcode).
+    body = %{
+      "playbackInfoDto" => %{
+        "DeviceProfile" => %{
+          "DirectPlayProfiles" => [
+            %{
+              "Container" => "mp4",
+              "Type" => "Video",
+              "VideoCodec" => "hevc",
+              "AudioCodec" => "aac"
+            }
+          ]
+        }
+      }
+    }
+
+    conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
+    assert %{"MediaSources" => [ms]} = json_response(conn, 200)
+    # Fixture is h264/aac/mp4 — hevc-only DirectPlay profile forces transcode
+    assert ms["SupportsDirectPlay"] == false
+    assert ms["SupportsTranscoding"] == true
+    assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingUrl"] =~ "master.m3u8"
+  end
+
   test "PlaybackInfo DirectPlays when profile allows container and codecs", %{
     conn: conn,
     movie: movie,

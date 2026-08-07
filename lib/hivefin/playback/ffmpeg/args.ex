@@ -184,14 +184,17 @@ defmodule Hivefin.Playback.FFmpeg.Args do
   # Always convert to 8-bit 4:2:0 — required for h264_nvenc on 10-bit HEVC/HDR.
   # N-based setpts rebuilds timeline from 0 (PTS-STARTPTS leaves large offsets on
   # some Dolby Vision / HDR sources and stalls hls.js after a few segments).
+  # Force BT.709 tags so browsers do not treat 8-bit output as HDR (black/blank).
+  @sdr_tags ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"]
+
   defp video_filter_args(nil),
-    do: ["-vf", "setpts=N/(FRAME_RATE*TB),format=yuv420p"]
+    do: ["-vf", "setpts=N/(FRAME_RATE*TB),format=yuv420p"] ++ @sdr_tags
 
   defp video_filter_args(height) when is_integer(height) and height > 0,
-    do: ["-vf", "scale=-2:#{height},format=yuv420p,setpts=N/(FRAME_RATE*TB)"]
+    do: ["-vf", "scale=-2:#{height},format=yuv420p,setpts=N/(FRAME_RATE*TB)"] ++ @sdr_tags
 
   defp video_filter_args(_),
-    do: ["-vf", "setpts=N/(FRAME_RATE*TB),format=yuv420p"]
+    do: ["-vf", "setpts=N/(FRAME_RATE*TB),format=yuv420p"] ++ @sdr_tags
 
   defp container_args("hls", output, opts) do
     segment_pattern = Map.fetch!(opts, :hls_segment_pattern)

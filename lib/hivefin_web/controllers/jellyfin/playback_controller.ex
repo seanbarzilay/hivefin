@@ -18,22 +18,15 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
         |> json(%{"error" => "not_found"})
 
       item ->
-        profile =
-          body
-          |> DeviceProfile.from_playback_info_body()
-
-        # Also accept top-level DeviceProfile already in params
-        profile =
-          if Map.has_key?(params, "DeviceProfile") do
-            DeviceProfile.from_jellyfin(params["DeviceProfile"])
-          else
-            profile
-          end
+        profile = DeviceProfile.from_playback_info_body(body)
 
         response =
           PlaybackInfo.build(item, conn.assigns.current_user,
             device_profile: profile,
-            play_session_id: params["PlaySessionId"] || body["PlaySessionId"]
+            play_session_id:
+              params["PlaySessionId"] ||
+                body["PlaySessionId"] ||
+                get_in(body, ["playbackInfoDto", "PlaySessionId"])
           )
 
         json(conn, response)
