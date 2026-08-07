@@ -318,6 +318,9 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     token_q = URI.encode_www_form(token)
 
     body
+    # hls.js treats EVENT/live playlists as "start at live edge" by default, which
+    # skips early segments once FFmpeg has run ahead of realtime. Force start at 0.
+    |> inject_hls_start_at_zero()
     |> String.split("\n")
     |> Enum.map(fn line ->
       trimmed = String.trim(line)
@@ -336,6 +339,14 @@ defmodule HivefinWeb.Jellyfin.VideoController do
       end
     end)
     |> Enum.join("\n")
+  end
+
+  defp inject_hls_start_at_zero(body) do
+    if String.contains?(body, "#EXT-X-START") do
+      body
+    else
+      String.replace(body, "#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES", global: false)
+    end
   end
 
   defp segment_content_type(file) do
