@@ -27,6 +27,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     user_data = Keyword.get(opts, :user_data)
     playable? = item.type in [:movie, :episode]
     sources = if playable? or include_field?(fields, "MediaSources"), do: load_sources(item, opts), else: []
+    image_tags = ImageCache.image_tags_for(item)
 
     base = %{
       "Name" => item.name,
@@ -47,7 +48,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "SeriesId" => Id.format(series_id(item)),
       "SeasonId" => Id.format(season_id(item)),
       "ProviderIds" => item.provider_ids || %{},
-      "ImageTags" => ImageCache.image_tags_for(item),
+      "ImageTags" => image_tags,
+      # Some clients (and person cards) prefer PrimaryImageTag over ImageTags.
+      "PrimaryImageTag" => Map.get(image_tags, "Primary"),
       "UserData" => user_data(user_data),
       "RunTimeTicks" => runtime_ticks_from_sources(sources)
     }

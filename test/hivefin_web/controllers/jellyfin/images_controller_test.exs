@@ -93,6 +93,16 @@ defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
     assert conn.resp_body == File.read!(path)
   end
 
+  test "GET Primary works without auth (jellyfin-vue <img src>)", %{
+    movie: movie,
+    file_path: path
+  } do
+    # No X-Emby-Authorization — matches browser image tags.
+    conn = get(build_conn(), "/Items/#{movie.id}/Images/Primary?format=Webp&quality=90")
+    assert conn.status == 200
+    assert conn.resp_body == File.read!(path)
+  end
+
   test "GET Backdrop returns 404 when missing", %{conn: conn, movie: movie} do
     conn = get(conn, ~p"/Items/#{movie.id}/Images/Backdrop")
     assert conn.status == 404
