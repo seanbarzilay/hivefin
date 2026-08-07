@@ -8,10 +8,31 @@ defmodule HivefinWeb.WebClientController do
   """
   use HivefinWeb, :controller
 
+  # Never SPA-fallback these — they must 404 as JSON if unrouted, not HTML.
+  @api_roots ~w(
+    system users items videos sessions branding shows userviews useritems
+    displaypreferences healthz readyz quickconnect admin api socket liveStreams
+    livestreams libraries artists genres persons studios playbackinfo
+  )
+
   @doc """
   Serves `priv/jellyfin-web/index.html` for SPA client-side routes.
   """
-  def index(conn, _params) do
+  def index(conn, params) do
+    path_info = Map.get(params, "path") || []
+
+    cond do
+      api_like?(path_info) ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{"error" => "not_found"})
+
+      true ->
+        serve_index(conn)
+    end
+  end
+
+  defp serve_index(conn) do
     path = index_path()
 
     if is_binary(path) and File.regular?(path) do
@@ -30,7 +51,16 @@ defmodule HivefinWeb.WebClientController do
     end
   end
 
+  defp api_like?([]), do: false
+
+  defp api_like?([first | _]) when is_binary(first) do
+    String.downcase(first) in @api_roots
+  end
+
+  defp api_like?(_), do: false
+
   defp index_path do
     Application.app_dir(:hivefin, "priv/jellyfin-web/index.html")
   end
 end
+

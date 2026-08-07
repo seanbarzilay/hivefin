@@ -56,6 +56,8 @@ defmodule HivefinWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
+  # Normalize /system/info/public → /System/Info/Public before routing
+  plug HivefinWeb.Plugs.NormalizeJellyfinPath
   plug HivefinWeb.Router
 end
 

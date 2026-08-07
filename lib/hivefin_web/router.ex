@@ -103,6 +103,8 @@ defmodule HivefinWeb.Router do
     get "/System/Ping", SystemController, :ping
     post "/System/Ping", SystemController, :ping
     get "/Branding/Configuration", BrandingController, :configuration
+    get "/Branding/Css", BrandingController, :css
+    get "/Branding/Css.css", BrandingController, :css
     get "/Users/Public", UserController, :public_users
     post "/Users/AuthenticateByName", UserController, :authenticate_by_name
 

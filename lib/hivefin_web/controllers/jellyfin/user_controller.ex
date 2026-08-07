@@ -61,11 +61,17 @@ defmodule HivefinWeb.Jellyfin.UserController do
   end
 
   @doc """
-  Public users list (unauthenticated). Hivefin has no public/anonymous users.
-  Jellyfin Vue calls this after discovery.
+  Public users list (unauthenticated) for the login user picker.
+
+  Returns non-hidden users (Hivefin has no hide flag yet — all users).
+  Passwords are never included (`Dto.User` already omits secrets).
   """
   def public_users(conn, _params) do
-    json(conn, [])
+    users =
+      Accounts.list_users()
+      |> Enum.map(&Dto.User.from_user/1)
+
+    json(conn, users)
   end
 
 
