@@ -35,6 +35,16 @@ defmodule HivefinWeb.Endpoint do
     gzip: false,
     brotli: false
 
+  # Same bundle under /web — Jellyfin's canonical location for the web client.
+  # The LG webOS app fetches /web/manifest.json, then loads /web/ + the manifest
+  # start_url ("index.html#/home.html"). jellyfin-web's asset paths are relative,
+  # so they resolve under /web/ as well.
+  plug Plug.Static,
+    at: "/web",
+    from: {:hivefin, "priv/jellyfin-web"},
+    gzip: false,
+    brotli: false
+
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
   if code_reloading? do
@@ -60,4 +70,3 @@ defmodule HivefinWeb.Endpoint do
   plug HivefinWeb.Plugs.NormalizeJellyfinPath
   plug HivefinWeb.Router
 end
-

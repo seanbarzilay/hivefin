@@ -9,11 +9,15 @@ defmodule HivefinWeb.WebClientController do
   use HivefinWeb, :controller
 
   # Never SPA-fallback these — they must 404 as JSON if unrouted, not HTML.
+  # `web` is deliberately absent: in Jellyfin /web IS the web client, not an API
+  # root. Blacklisting it made /web/* return JSON 404, so the LG webOS app failed
+  # at its /web/manifest.json probe. Real files under /web are served by
+  # Plug.Static; everything else falls through here for SPA routing.
   @api_roots ~w(
     system users items videos sessions branding shows userviews useritems
     displaypreferences healthz readyz quickconnect admin api socket liveStreams
     livestreams libraries artists genres persons studios playbackinfo
-    startup localization web configuration playback
+    startup localization configuration playback
   )
 
   @doc """
@@ -85,4 +89,3 @@ defmodule HivefinWeb.WebClientController do
     Application.app_dir(:hivefin, "priv/jellyfin-web/index.html")
   end
 end
-
