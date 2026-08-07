@@ -24,6 +24,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
           PlaybackInfo.build(item, conn.assigns.current_user,
             device_profile: profile,
             stream_format: stream_format_for_conn(conn),
+            base_url: request_base_url(conn),
             play_session_id:
               params["PlaySessionId"] ||
                 body["PlaySessionId"] ||
@@ -56,9 +57,23 @@ defmodule HivefinWeb.Jellyfin.PlaybackController do
 
     cond do
       String.contains?(client, "vue") -> :hls
-      String.contains?(client, "jellyfin web") -> :progressive
-      String.contains?(client, "android") -> :progressive
-      true -> :hls
+      # Default progressive for unknown mobile/web clients — they never request HLS.
+      true -> :progressive
+    end
+  end
+
+  defp request_base_url(conn) do
+    scheme = Atom.to_string(conn.scheme)
+    host = conn.host
+    port = conn.port
+
+    default_port? =
+      (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+
+    if default_port? do
+      "#{scheme}://#{host}"
+    else
+      "#{scheme}://#{host}:#{port}"
     end
   end
 end

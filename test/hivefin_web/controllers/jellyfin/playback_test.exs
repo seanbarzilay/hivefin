@@ -26,15 +26,16 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
       Hivefin.Accounts.issue_token(user, %{
         device_id: "dev",
         device_name: "Dev",
-        client: "Test",
+        client: "Jellyfin Vue",
         client_version: "1.0"
       })
 
+    # Client name selects stream format (Vue → HLS; Jellyfin Web → progressive).
     conn =
       conn
       |> put_req_header(
         "x-emby-authorization",
-        ~s(MediaBrowser Client="Test", Device="Dev", DeviceId="dev", Version="1.0", Token="#{token}")
+        ~s(MediaBrowser Client="Jellyfin Vue", Device="Dev", DeviceId="dev", Version="1.0", Token="#{token}")
       )
 
     {:ok, library} =
@@ -52,7 +53,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     {:ok, conn: conn, user: user, library: library, movie: movie, source: source}
   end
 
-  test "POST PlaybackInfo returns MediaSources without Path and with DirectStreamUrl", %{
+  test "POST PlaybackInfo returns MediaSources with DirectStreamUrl", %{
     conn: conn,
     movie: movie,
     source: source,
@@ -85,7 +86,9 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert media_source["Container"] == "mp4"
     assert media_source["SupportsDirectPlay"] == true
     assert media_source["SupportsDirectStream"] == true
-    refute Map.has_key?(media_source, "Path")
+    # HTTP Path is the playable stream URL (not a filesystem path)
+    assert is_binary(media_source["Path"])
+    assert media_source["Path"] =~ "/Videos/"
     assert is_binary(media_source["DirectStreamUrl"])
     assert media_source["DirectStreamUrl"] =~ "/Videos/#{Id.format(movie.id)}/stream"
     assert media_source["DirectStreamUrl"] =~ "api_key="
@@ -409,7 +412,6 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Static=false"
     refute ms["TranscodingUrl"] =~ "Transcode=true"
-    refute Map.has_key?(ms, "Path")
   end
 
   test "PlaybackInfo transcodes via HLS when video codec not allowed", %{
