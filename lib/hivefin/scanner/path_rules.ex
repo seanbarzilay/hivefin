@@ -3,7 +3,10 @@ defmodule Hivefin.Scanner.PathRules do
   Path safety and media file classification rules for library scanning.
   """
 
-  @video_extensions MapSet.new(~w(.mp4 .mkv .avi .m4v .ts .m2ts .webm))
+  # Common containers used by Jellyfin libraries (recursive subfolders OK).
+  @video_extensions MapSet.new(
+                      ~w(.mp4 .mkv .avi .m4v .mov .wmv .flv .webm .ts .m2ts .mts .mpg .mpeg .mpe .divx .xvid .vob)
+                    )
 
   @ignored_dirs MapSet.new([
                   "@eadir",
@@ -13,7 +16,11 @@ defmodule Hivefin.Scanner.PathRules do
                   "trailer",
                   "trailers",
                   "featurettes",
-                  "behind the scenes"
+                  "behind the scenes",
+                  # Don't descend into junk folders; still walk all other subdirs recursively
+                  "#recycle",
+                  "$recycle.bin",
+                  "system volume information"
                 ])
 
   @doc """

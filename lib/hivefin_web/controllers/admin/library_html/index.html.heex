@@ -138,7 +138,10 @@
             autocomplete="off"
           />
           <p class="text-xs text-base-content/50">
-            Path must already exist on the server host. Use Scan after create.
+            Path must exist <strong>inside the container</strong> (Docker: e.g.
+            <code class="text-xs">/media/movies</code> if you mounted media at
+            <code class="text-xs">/media</code>). Scans walk <strong>all subfolders</strong>
+            recursively. Supported: mp4, mkv, avi, mov, m4v, webm, ts, …
           </p>
           <.button type="submit">Create library</.button>
         </.form>

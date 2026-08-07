@@ -3,6 +3,8 @@ defmodule Hivefin.Scanner.MovieMatcher do
   Parses movie titles and years from folder / file names.
   """
 
+  alias Hivefin.Scanner.PathRules
+
   @year_pattern ~r/^(?<title>.+)\s+\((?<year>(?:19|20)\d{2})\)\s*$/u
   @year_suffix ~r/^(?<title>.+)[.\s_\-]+(?<year>(?:19|20)\d{2})$/u
 
@@ -32,9 +34,7 @@ defmodule Hivefin.Scanner.MovieMatcher do
   end
 
   defp strip_video_extension(name) do
-    ext = name |> Path.extname() |> String.downcase()
-
-    if ext in ~w(.mp4 .mkv .avi .m4v .ts .m2ts .webm) do
+    if PathRules.video_file?(name) do
       Path.rootname(name)
     else
       name

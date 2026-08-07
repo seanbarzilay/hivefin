@@ -232,38 +232,10 @@ defmodule Hivefin.Scanner do
 
           case library.type do
             :movies ->
-              case scan_movies(library, cancel_fun) do
-                {:cancelled, found, added} ->
-                  finalize_job(job, :cancelled, found, added, nil)
-                  {:error, :cancelled}
-
-                {found, added} ->
-                  if cancel_fun.() do
-                    finalize_job(job, :cancelled, found, added, nil)
-                    {:error, :cancelled}
-                  else
-                    finalize_job(job, :completed, found, added, nil)
-                    LibraryContext.touch_library_scanned(library)
-                    {:ok, found, added}
-                  end
-              end
+              finish_scan_branch(library, job, cancel_fun, scan_movies(library, cancel_fun))
 
             :tv ->
-              case scan_tv(library, cancel_fun) do
-                {:cancelled, found, added} ->
-                  finalize_job(job, :cancelled, found, added, nil)
-                  {:error, :cancelled}
-
-                {found, added} ->
-                  if cancel_fun.() do
-                    finalize_job(job, :cancelled, found, added, nil)
-                    {:error, :cancelled}
-                  else
-                    finalize_job(job, :completed, found, added, nil)
-                    LibraryContext.touch_library_scanned(library)
-                    {:ok, found, added}
-                  end
-              end
+              finish_scan_branch(library, job, cancel_fun, scan_tv(library, cancel_fun))
           end
         rescue
           e ->
@@ -309,6 +281,39 @@ defmodule Hivefin.Scanner do
     )
   end
 
+  defp finish_scan_branch(library, job, cancel_fun, branch_result) do
+    case branch_result do
+      {:cancelled, found, added} ->
+        finalize_job(job, :cancelled, found, added, nil)
+        {:error, :cancelled}
+
+      {:error, {:walk_failed, _reason, message}} ->
+        finalize_job(job, :failed, 0, 0, message)
+        {:error, :walk_failed}
+
+      {found, added, hint} when is_binary(hint) ->
+        # 0 files but walk OK — complete with admin-visible hint
+        if cancel_fun.() do
+          finalize_job(job, :cancelled, found, added, nil)
+          {:error, :cancelled}
+        else
+          finalize_job(job, :completed, found, added, hint)
+          LibraryContext.touch_library_scanned(library)
+          {:ok, found, added}
+        end
+
+      {found, added} ->
+        if cancel_fun.() do
+          finalize_job(job, :cancelled, found, added, nil)
+          {:error, :cancelled}
+        else
+          finalize_job(job, :completed, found, added, nil)
+          LibraryContext.touch_library_scanned(library)
+          {:ok, found, added}
+        end
+    end
+  end
+
   defp scan_movies(library, cancel_fun) do
     scan_video_files(library, cancel_fun, &import_movie_file/3)
   end
@@ -319,8 +324,28 @@ defmodule Hivefin.Scanner do
 
   defp scan_video_files(library, cancel_fun, import_fun) do
     root = library.path
-    videos = Walker.list_video_files(root)
 
+    case Walker.list_video_files(root) do
+      {:error, reason} ->
+        {:error, {:walk_failed, reason, empty_walk_hint(root, reason)}}
+
+      {:ok, []} ->
+        Logger.warning(
+          "scan found 0 video files under #{root} (recursive walk). " <>
+            "extensions=#{inspect(PathRules.video_extensions())}"
+        )
+
+        # Completed with zero — surface a hint on the job for the admin UI
+        {0, 0, empty_library_hint(root)}
+
+      {:ok, videos} ->
+        reduce_import_videos(library, root, videos, cancel_fun, import_fun)
+    end
+  catch
+    {:cancelled, found, added} -> {:cancelled, found, added}
+  end
+
+  defp reduce_import_videos(library, root, videos, cancel_fun, import_fun) do
     Enum.reduce(videos, {0, 0}, fn path, {found, added} ->
       maybe_test_hook(library.id)
       maybe_test_delay()
@@ -346,8 +371,27 @@ defmodule Hivefin.Scanner do
         {found, added}
       end
     end)
-  catch
-    {:cancelled, found, added} -> {:cancelled, found, added}
+  end
+
+  defp empty_walk_hint(root, :enoent),
+    do: "Library path does not exist in this container: #{root}"
+
+  defp empty_walk_hint(root, :not_a_directory),
+    do: "Library path is not a directory: #{root}"
+
+  defp empty_walk_hint(root, :eacces),
+    do:
+      "Permission denied reading #{root}. In Docker, ensure MEDIA_HOST_PATH is mounted and readable by uid 1000 (hivefin user)."
+
+  defp empty_walk_hint(root, reason),
+    do: "Cannot read library path #{root}: #{inspect(reason)}"
+
+  defp empty_library_hint(root) do
+    exts = PathRules.video_extensions() |> Enum.sort() |> Enum.join(", ")
+
+    "No video files under #{root} (scan is recursive into subfolders). " <>
+      "Check: path is the container path (e.g. /media/movies), mount is correct, " <>
+      "and files use supported extensions (#{exts})."
   end
 
   defp import_movie_file(library, root, path) do
