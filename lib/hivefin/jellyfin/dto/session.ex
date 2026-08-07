@@ -6,11 +6,30 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   alias Hivefin.Accounts.AccessToken
   alias Hivefin.Accounts.User
 
+  # Properties jellyfin-sdk-kotlin declares on SessionInfoDto with no default
+  # value: kotlinx.serialization requires the key to be present, and a missing
+  # one makes the client discard the session silently.
+  @required %{
+    "PlayableMediaTypes" => ["Video"],
+    "UserId" => nil,
+    "LastActivityDate" => nil,
+    "LastPlaybackCheckIn" => nil,
+    "IsActive" => true,
+    "SupportsMediaControl" => false,
+    "SupportsRemoteControl" => false,
+    "HasCustomDeviceName" => false,
+    "SupportedCommands" => []
+  }
+
+  @doc "Required SessionInfoDto key names."
+  def required_keys, do: Map.keys(@required)
+
   @doc """
   Builds a SessionInfoDto from an `AccessToken` (user should be preloaded).
   """
   def from_access_token(%AccessToken{} = at) do
     user = at.user
+    last_activity = datetime(at.updated_at || at.inserted_at) || now()
 
     %{
       "Id" => Hivefin.Jellyfin.Id.format(at.id),
@@ -24,9 +43,9 @@ defmodule Hivefin.Jellyfin.Dto.Session do
       "SupportsMediaControl" => false,
       "SupportsRemoteControl" => false,
       "HasCustomDeviceName" => false,
-      "LastActivityDate" => datetime(at.updated_at || at.inserted_at),
+      "LastActivityDate" => last_activity,
+      "LastPlaybackCheckIn" => last_activity,
       "ServerId" => Hivefin.Jellyfin.Id.format(Hivefin.Jellyfin.SystemInfo.server_id()),
-
       "PlayableMediaTypes" => ["Video"],
       "SupportedCommands" => [],
       "Capabilities" => %{
@@ -36,7 +55,12 @@ defmodule Hivefin.Jellyfin.Dto.Session do
         "SupportsPersistentIdentifier" => true
       }
     }
+    |> then(&Map.merge(@required, drop_nils(&1)))
   end
+
+  defp drop_nils(map), do: map |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+  defp now, do: DateTime.utc_now() |> DateTime.to_iso8601()
 
   defp user_name(%User{name: name}) when is_binary(name), do: name
   defp user_name(%User{username: username}) when is_binary(username), do: username
