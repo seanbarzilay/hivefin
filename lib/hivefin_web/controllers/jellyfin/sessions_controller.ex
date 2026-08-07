@@ -24,7 +24,12 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
     sessions =
       user.id
       |> Sessions.live_for_user(device_id: device_id)
-      |> Enum.map(fn {at, play_state} -> SessionDto.from_access_token(at, state: play_state) end)
+      |> Enum.map(fn {at, play_state} ->
+        # live_for_user/2 only returns access tokens with a live socket, so
+        # every entry here is controllable by definition — same condition
+        # the Sessions websocket push (sessions_message/1) uses.
+        SessionDto.from_access_token(at, state: play_state, controllable: true)
+      end)
 
     json(conn, sessions)
   end

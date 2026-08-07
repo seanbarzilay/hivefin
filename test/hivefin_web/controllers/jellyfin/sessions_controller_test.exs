@@ -122,6 +122,57 @@ defmodule HivefinWeb.Jellyfin.SessionsControllerTest do
     assert session["PlayState"]["PositionTicks"] == 500
   end
 
+  # Both emitters build their payload from Sessions.live_for_user/2, which
+  # only returns access tokens with a live socket — so within that set every
+  # session is controllable, and the REST list and the socket push must agree.
+  test "GET /Sessions and the Sessions socket push agree on capability for the same session", %{
+    conn: conn,
+    user: user,
+    access_token: access_token
+  } do
+    :ok = Hivefin.Sessions.register(access_token.id, %{user_id: user.id, device_id: "dev-rest"})
+
+    rest_body = conn |> get(~p"/Sessions") |> json_response(200)
+    assert rest_body != [], "expected the live session to be present"
+
+    rest_session =
+      Enum.find(rest_body, &(&1["Id"] == Hivefin.Jellyfin.Id.format(access_token.id)))
+
+    assert rest_session, "expected a REST session entry for the live socket"
+
+    socket_state = %{
+      user_id: user.id,
+      session_id: access_token.id,
+      device_id: "dev-rest",
+      subscriptions: MapSet.new()
+    }
+
+    {:push, _, socket_state} = HivefinWeb.JellyfinSocket.init(socket_state)
+
+    {:push, {:text, json}, _} =
+      HivefinWeb.JellyfinSocket.handle_in(
+        {Jason.encode!(%{"MessageType" => "SessionsStart"}), [opcode: :text]},
+        socket_state
+      )
+
+    socket_sessions = Jason.decode!(json)["Data"]
+    assert socket_sessions != [], "expected at least one session in the Sessions push"
+
+    socket_session =
+      Enum.find(socket_sessions, &(&1["Id"] == Hivefin.Jellyfin.Id.format(access_token.id)))
+
+    assert socket_session, "expected a socket push entry for the live socket"
+
+    assert rest_session["SupportsMediaControl"] == socket_session["SupportsMediaControl"]
+    assert rest_session["SupportsRemoteControl"] == socket_session["SupportsRemoteControl"]
+    assert rest_session["SupportedCommands"] == socket_session["SupportedCommands"]
+
+    # Not just "agree" — a live socket must actually be reported controllable.
+    assert rest_session["SupportsMediaControl"] == true
+    assert rest_session["SupportsRemoteControl"] == true
+    assert rest_session["SupportedCommands"] != []
+  end
+
   test "a user with no live socket gets an empty list, not a crash", %{conn: conn} do
     assert [] == conn |> get(~p"/Sessions") |> json_response(200)
   end

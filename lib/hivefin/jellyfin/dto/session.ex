@@ -24,6 +24,14 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   @doc "Required SessionInfoDto key names."
   def required_keys, do: Map.keys(@required)
 
+  # GeneralCommandType values hivefin can actually deliver. Advertising more
+  # than this gives clients a control that silently does nothing — there is
+  # no command-delivery endpoint at all yet (see Task 9).
+  @supported_commands ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
+
+  @doc "GeneralCommandType values hivefin can actually deliver."
+  def supported_commands, do: @supported_commands
+
   # Properties jellyfin-sdk-kotlin declares on PlayerStateInfo with no default
   # value — same MissingFieldException risk as @required above. Unlike
   # SessionInfoDto, this nested object must be present on EVERY session, idle
@@ -46,11 +54,18 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   is_paused: boolean()}`. `PlayState` is always present (idle values when there
   is nothing playing). `NowPlayingItem` is included only when `item_id`
   resolves to an item, and omitted otherwise.
+
+  `opts[:controllable]` (default `false`) is whether this session holds a live
+  socket right now. When true, `SupportsMediaControl`, `SupportsRemoteControl`,
+  and `Capabilities.SupportsMediaControl` report `true` and `SupportedCommands`
+  lists `supported_commands/0`.
   """
   def from_access_token(%AccessToken{} = at, opts \\ []) do
     user = at.user
     last_activity = datetime(at.updated_at || at.inserted_at) || now()
     state = Keyword.get(opts, :state)
+    controllable? = Keyword.get(opts, :controllable, false)
+    commands = if controllable?, do: @supported_commands, else: []
 
     %{
       "Id" => Hivefin.Jellyfin.Id.format(at.id),
@@ -61,18 +76,18 @@ defmodule Hivefin.Jellyfin.Dto.Session do
       "DeviceName" => at.device_name || "Unknown Device",
       "ApplicationVersion" => at.client_version || "0.0.0",
       "IsActive" => true,
-      "SupportsMediaControl" => false,
-      "SupportsRemoteControl" => false,
+      "SupportsMediaControl" => controllable?,
+      "SupportsRemoteControl" => controllable?,
       "HasCustomDeviceName" => false,
       "LastActivityDate" => last_activity,
       "LastPlaybackCheckIn" => last_activity,
       "ServerId" => Hivefin.Jellyfin.Id.format(Hivefin.Jellyfin.SystemInfo.server_id()),
       "PlayableMediaTypes" => ["Video"],
-      "SupportedCommands" => [],
+      "SupportedCommands" => commands,
       "Capabilities" => %{
         "PlayableMediaTypes" => ["Video"],
-        "SupportedCommands" => [],
-        "SupportsMediaControl" => false,
+        "SupportedCommands" => commands,
+        "SupportsMediaControl" => controllable?,
         "SupportsPersistentIdentifier" => true
       }
     }

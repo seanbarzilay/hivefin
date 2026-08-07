@@ -210,4 +210,46 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     refute Map.has_key?(dto, "NowPlayingItem")
     assert dto["PlayState"]["PositionTicks"] == 500
   end
+
+  test "supported_commands/0 lists the commands hivefin can actually deliver" do
+    assert SessionDto.supported_commands() == ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
+  end
+
+  test "a session with no live socket is not controllable", %{access_token: at} do
+    dto = SessionDto.from_access_token(at)
+
+    assert dto["SupportsMediaControl"] == false
+    assert dto["SupportsRemoteControl"] == false
+    assert dto["SupportedCommands"] == []
+  end
+
+  test "a controllable session advertises control support", %{access_token: at} do
+    dto = SessionDto.from_access_token(at, controllable: true)
+
+    assert dto["SupportsMediaControl"] == true
+    assert dto["SupportsRemoteControl"] == true
+    assert dto["Capabilities"]["SupportsMediaControl"] == true
+    assert "DisplayMessage" in dto["SupportedCommands"]
+  end
+
+  # Regression risk: the new :controllable option's map merge could clobber
+  # or drop unrelated keys instead of only touching the 4 capability entries.
+  test "controllable sessions still carry every required field, PlayState included", %{
+    access_token: at
+  } do
+    dto = SessionDto.from_access_token(at, controllable: true)
+
+    for key <- @required do
+      assert Map.has_key?(dto, key), "missing #{key}"
+      refute is_nil(dto[key]), "#{key} is null"
+    end
+
+    play_state = dto["PlayState"]
+    assert play_state, "expected PlayState to be present even when controllable"
+
+    for key <- @play_state_required do
+      assert Map.has_key?(play_state, key), "PlayState missing #{key}"
+      refute is_nil(play_state[key]), "PlayState #{key} is null"
+    end
+  end
 end

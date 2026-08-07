@@ -109,7 +109,11 @@ defmodule HivefinWeb.JellyfinSocket do
     sessions =
       state.user_id
       |> Sessions.live_for_user()
-      |> Enum.map(fn {at, play_state} -> SessionDto.from_access_token(at, state: play_state) end)
+      |> Enum.map(fn {at, play_state} ->
+        # live_for_user/2 only returns access tokens with a live socket, so
+        # every entry here is controllable by definition.
+        SessionDto.from_access_token(at, state: play_state, controllable: true)
+      end)
 
     WsMessage.encode("Sessions", sessions)
   end
