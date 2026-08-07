@@ -74,7 +74,17 @@ defmodule Hivefin.Playback.FFmpeg.ArgsTest do
       assert "-crf" in args
       assert "23" in args
       assert "-vf" in args
-      assert "scale=-2:720,format=yuv420p,setpts=N/(FRAME_RATE*TB)" in args
+      assert "-map_metadata" in args
+      assert "-1" in args
+
+      vf = Enum.at(args, Enum.find_index(args, &(&1 == "-vf")) + 1)
+      assert vf =~ "scale=-2:720"
+      assert vf =~ "setpts=N/(FRAME_RATE*TB)"
+      assert vf =~ "format=yuv420p"
+      # Full HDR chain when ffmpeg has zscale; otherwise SDR-only fallback.
+      assert String.contains?(vf, "tonemap=tonemap=hable") or
+               not String.contains?(vf, "zscale")
+
       assert "-c:a" in args
       assert "aac" in args
       assert "-af" in args

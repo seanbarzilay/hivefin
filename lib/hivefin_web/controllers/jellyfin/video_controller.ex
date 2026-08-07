@@ -302,7 +302,11 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     end
   end
 
-  # Wait until the session is ready and the playlist lists at least one segment.
+  # jellyfin-vue DeviceProfile MinSegments is typically 1–2. Wait for two
+  # segments so hls.js has a small buffer before we hand back the playlist.
+  @hls_min_segments 2
+
+  # Wait until the session is ready and the playlist lists enough segments.
   defp await_hls_playlist(pid, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
@@ -329,7 +333,7 @@ defmodule HivefinWeb.Jellyfin.VideoController do
 
       case is_binary(path) && File.read(path) do
         {:ok, body} ->
-          if hls_segment_count(body) >= 1 do
+          if hls_segment_count(body) >= @hls_min_segments do
             {:ok, body}
           else
             Process.sleep(150)
@@ -355,35 +359,52 @@ defmodule HivefinWeb.Jellyfin.VideoController do
   defp rewrite_hls_playlist(body, session_id, token) when is_binary(body) do
     token_q = URI.encode_www_form(token)
 
-    body
-    # hls.js treats EVENT/live playlists as "start at live edge" by default, which
-    # skips early segments once FFmpeg has run ahead of realtime. Force start at 0.
-    |> inject_hls_start_at_zero()
-    |> String.split("\n")
-    |> Enum.map(fn line ->
-      trimmed = String.trim(line)
+    rewritten =
+      body
+      # hls.js treats EVENT/live playlists as "start at live edge" by default, which
+      # skips early segments once FFmpeg has run ahead of realtime. Force start at 0.
+      |> inject_hls_start_at_zero()
+      |> String.split("\n")
+      |> Enum.map(fn line ->
+        trimmed = String.trim(line)
 
-      cond do
-        trimmed == "" or String.starts_with?(trimmed, "#") ->
-          line
+        cond do
+          trimmed == "" or String.starts_with?(trimmed, "#") ->
+            line
 
-        Regex.match?(~r/^seg_\d+\.(ts|m4s)$/i, Path.basename(trimmed)) ->
-          name = Path.basename(trimmed)
-          # Path-relative to /Videos/:id/master.m3u8 → /Videos/:id/hls/:session/:file
-          "hls/#{session_id}/#{name}?api_key=#{token_q}"
+          Regex.match?(~r/^seg_\d+\.(ts|m4s)$/i, Path.basename(trimmed)) ->
+            name = Path.basename(trimmed)
+            # Path-relative to /Videos/:id/master.m3u8 → /Videos/:id/hls/:session/:file
+            "hls/#{session_id}/#{name}?api_key=#{token_q}"
 
-        true ->
-          line
-      end
-    end)
-    |> Enum.join("\n")
+          true ->
+            line
+        end
+      end)
+      |> Enum.join("\n")
+
+    # HLS clients are picky about a trailing newline after the last segment line.
+    if String.ends_with?(rewritten, "\n"), do: rewritten, else: rewritten <> "\n"
   end
 
   defp inject_hls_start_at_zero(body) do
-    if String.contains?(body, "#EXT-X-START") do
-      body
-    else
-      String.replace(body, "#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES", global: false)
+    cond do
+      String.contains?(body, "#EXT-X-START") ->
+        body
+
+      String.contains?(body, "#EXT-X-VERSION:") ->
+        # Prefer after VERSION (HLS tag order) when present.
+        String.replace(
+          body,
+          ~r/(#EXT-X-VERSION:\d+\r?\n)/,
+          "\\1#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n",
+          global: false
+        )
+
+      true ->
+        String.replace(body, "#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES",
+          global: false
+        )
     end
   end
 
