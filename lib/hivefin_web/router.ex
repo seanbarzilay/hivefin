@@ -36,9 +36,12 @@ defmodule HivefinWeb.Router do
     pipe_through :jellyfin_api
 
     get "/System/Info/Public", SystemController, :public_info
+    get "/System/Ping", SystemController, :ping
+    post "/System/Ping", SystemController, :ping
     get "/Branding/Configuration", BrandingController, :configuration
     get "/Users/Public", UserController, :public_users
     post "/Users/AuthenticateByName", UserController, :authenticate_by_name
+
 
     pipe_through :jellyfin_auth
     get "/System/Info", SystemController, :info

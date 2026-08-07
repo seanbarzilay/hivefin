@@ -11,6 +11,19 @@ defmodule HivefinWeb.Jellyfin.SystemController do
     json(conn, SystemInfo.info(local_address: request_base_url(conn)))
   end
 
+  @doc """
+  Liveness ping used by jellyfin-vue `isConnectedToServer` (getPingSystem).
+
+  When this fails, Vue disables the login form (`:disabled="!isConnectedToServer"`).
+  Jellyfin returns the product name as a plain string body.
+  """
+  def ping(conn, _params) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(200, SystemInfo.product_name())
+  end
+
+
   defp request_base_url(conn) do
     scheme = Atom.to_string(conn.scheme)
     host = conn.host

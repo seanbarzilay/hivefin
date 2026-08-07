@@ -71,4 +71,15 @@ defmodule HivefinWeb.Jellyfin.SystemControllerTest do
     conn = get(conn, ~p"/Users/Public")
     assert json_response(conn, 200) == []
   end
+
+  test "GET /System/Ping returns product name for connection check", %{conn: conn} do
+    conn = get(conn, ~p"/System/Ping")
+    assert text_response(conn, 200) == "Jellyfin Server"
+  end
+
+  test "POST /System/Ping also works", %{conn: conn} do
+    conn = post(conn, ~p"/System/Ping")
+    assert text_response(conn, 200) == "Jellyfin Server"
+  end
 end
+
