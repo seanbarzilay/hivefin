@@ -35,6 +35,10 @@ services:
       context: .
       dockerfile: Dockerfile
     image: hivefin:local
+    # Host media trees are often 770 (e.g. linuxserver PUID 99). Run as root
+    # so scans and DirectPlay can read the same library paths as Jellyfin.
+    # Override with user: "${HIVEFIN_UID:-0}:${HIVEFIN_GID:-0}" if preferred.
+    user: "0:0"
     restart: unless-stopped
     depends_on:
       db:
