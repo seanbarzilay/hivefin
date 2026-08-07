@@ -80,9 +80,13 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
 
     default_audio_index = if default_audio, do: default_audio.index, else: nil
 
+    # Advertise MediaSource.Id == Item.Id (Jellyfin primary-source convention).
+    # Keep signing tokens with the real DB source id for path resolution.
+    item_id_fmt = Id.format(item.id)
+
     base = %{
-      "Id" => Id.format(source.id),
-      "ItemId" => Id.format(item.id),
+      "Id" => item_id_fmt,
+      "ItemId" => item_id_fmt,
       "Name" => source.path && Path.basename(source.path),
       "Path" => nil,
       "Container" => source.container,
@@ -107,11 +111,11 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     |> drop_nils()
   end
 
-  defp put_play_method(base, :direct_play, _item_id, source_id, token, _session, _meta) do
-    # Original file (incl. MKV) when the device profile allows DirectPlay.
-    # jellyfin-vue builds /Videos/{mediaSourceId}/stream.{Container}?Static=true
-    # when SupportsDirectStream is true.
-    url = direct_stream_url(source_id, source_id, token, static: true)
+  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta) do
+    # jellyfin-web builds Videos/{itemId}/stream itself; still provide a
+    # DirectStreamUrl for SDK clients. Path uses item id (JF convention).
+    url = direct_stream_url(item_id, item_id, token, static: true)
+    _ = source_id
 
     Map.merge(base, %{
       "SupportsDirectPlay" => true,
@@ -131,7 +135,9 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     # Remux only when DirectPlay is not allowed. jellyfin-vue always feeds
     # non-DirectPlay URLs into hls.js, so this must be HLS (not progressive MP4).
     # SupportsDirectStream stays false: vue treats it as Static=true original file.
-    url = hls_url(item_id, source_id, token, session, transcode: false)
+    # MediaSourceId query uses item id (matches advertised MediaSource.Id).
+    url = hls_url(item_id, item_id, token, session, transcode: false)
+    _ = source_id
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
@@ -148,7 +154,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
     # Re-encode only when codecs are not DirectPlay-compatible.
     # Must be HLS for jellyfin-vue (hls.js on every non-DirectPlay URL).
-    url = hls_url(item_id, source_id, token, session, transcode: true)
+    url = hls_url(item_id, item_id, token, session, transcode: true)
+    _ = source_id
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
@@ -162,20 +169,20 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     })
   end
 
-  defp direct_stream_url(path_id, source_id, token, opts) do
+  defp direct_stream_url(path_id, media_source_id, token, opts) do
     static = if Keyword.get(opts, :static, true), do: "true", else: "false"
     path_id = Id.format(path_id)
-    source_id = Id.format(source_id)
+    media_source_id = Id.format(media_source_id)
 
-    "/Videos/#{path_id}/stream?MediaSourceId=#{encode(source_id)}&Static=#{static}&api_key=#{encode(token)}"
+    "/Videos/#{path_id}/stream?MediaSourceId=#{encode(media_source_id)}&Static=#{static}&api_key=#{encode(token)}"
   end
 
-  defp hls_url(item_id, source_id, token, session, opts) do
+  defp hls_url(item_id, media_source_id, token, session, opts) do
     item_id = Id.format(item_id)
-    source_id = Id.format(source_id)
+    media_source_id = Id.format(media_source_id)
     transcode = if Keyword.get(opts, :transcode, false), do: "&Transcode=true", else: ""
 
-    "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
+    "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(media_source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
   end
 
 

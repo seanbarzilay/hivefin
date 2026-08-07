@@ -155,10 +155,14 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     # formats browsers can actually decode without MSE/HLS.
     browser_dp? = browser_direct_play_safe?(source, streams)
 
+    # Jellyfin sets primary MediaSource.Id == Item.Id. jellyfin-web and the
+    # Android shell then resolve play via getItem(mediaSource.Id); a distinct
+    # source UUID 404s and surfaces "Unable to find a valid media source".
+    item_id = Id.format(source.item_id)
+
     %{
-      "Id" => Id.format(source.id),
-      # ItemId helps clients that key streams by item
-      "ItemId" => Id.format(source.item_id),
+      "Id" => item_id,
+      "ItemId" => item_id,
       "Container" => source.container || "mp4",
       "Size" => source.size,
       "Bitrate" => source.bitrate,
@@ -169,6 +173,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "SupportsDirectPlay" => browser_dp?,
       "SupportsDirectStream" => browser_dp?,
       "SupportsTranscoding" => true,
+      "RequiredHttpHeaders" => %{},
       "MediaStreams" => Enum.map(streams, &from_media_stream/1)
     }
     |> drop_nils()

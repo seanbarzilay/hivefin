@@ -132,13 +132,17 @@ defmodule HivefinWeb.Jellyfin.VideoController do
     claim_msid = Id.coerce(claims.media_source_id)
     claims = %{claims | item_id: claim_item, media_source_id: claim_msid}
 
+    # MediaSourceId may be the real source UUID or the item id (JF primary-source id).
+    msid_ok? =
+      is_nil(query_msid) or query_msid == claim_msid or query_msid == claim_item
+
     cond do
-      claim_item == path_id and (is_nil(query_msid) or query_msid == claim_msid) ->
+      claim_item == path_id and msid_ok? ->
         with {:ok, path} <- LibraryContext.media_path_for_item(claim_item, claims) do
           {:ok, claims, path}
         end
 
-      claim_msid == path_id ->
+      claim_msid == path_id and msid_ok? ->
         with {:ok, path} <- LibraryContext.media_path_for_item(claim_item, claims) do
           {:ok, claims, path}
         end
@@ -156,12 +160,17 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         source_id =
           Id.coerce(params["MediaSourceId"] || params["mediaSourceId"] || path_id)
 
-        case LibraryContext.get_media_source(source_id) do
+        source =
+          LibraryContext.get_media_source(source_id) ||
+            LibraryContext.first_media_source_for_item(source_id) ||
+            LibraryContext.first_media_source_for_item(path_id)
+
+        case source do
           %MediaSource{id: msid, item_id: item_id} ->
             item_id = Id.coerce(item_id)
             msid = Id.coerce(msid)
 
-            if path_id == msid or path_id == item_id do
+            if path_id == msid or path_id == item_id or source_id == item_id do
               claims = %{user_id: user_id, item_id: item_id, media_source_id: msid}
 
               with {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do

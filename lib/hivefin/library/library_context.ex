@@ -375,7 +375,24 @@ defmodule Hivefin.Library.LibraryContext do
   def media_path_for_item(_, _), do: {:error, :forbidden}
 
   defp resolve_media_path(item_id, source_id) do
-    case get_media_source(source_id) do
+    source =
+      case get_media_source(source_id) do
+        %MediaSource{item_id: ^item_id} = source ->
+          source
+
+        %MediaSource{} ->
+          # Source belongs to a different item — reject
+          :forbidden
+
+        nil when source_id == item_id ->
+          # Jellyfin clients send MediaSourceId == Item.Id for the primary source.
+          first_media_source_for_item(item_id)
+
+        nil ->
+          nil
+      end
+
+    case source do
       %MediaSource{item_id: ^item_id, path: path} = source when is_binary(path) ->
         item = loaded_or(source.item, fn -> get_item(item_id) end)
 
@@ -406,13 +423,30 @@ defmodule Hivefin.Library.LibraryContext do
             end
         end
 
-      %MediaSource{} ->
+      :forbidden ->
         {:error, :forbidden}
 
-      nil ->
+      _ ->
         {:error, :not_found}
     end
   end
+
+  @doc """
+  First media source for an item (primary file). Used when clients pass
+  MediaSourceId equal to the item id (Jellyfin convention).
+  """
+  def first_media_source_for_item(item_id) when is_binary(item_id) do
+    item_id = Id.coerce(item_id)
+
+    MediaSource
+    |> where([ms], ms.item_id == ^item_id)
+    |> order_by([ms], asc: ms.inserted_at)
+    |> limit(1)
+    |> preload([:media_streams, item: :library])
+    |> Repo.one()
+  end
+
+  def first_media_source_for_item(_), do: nil
 
   defp loaded_or(%Ecto.Association.NotLoaded{}, fun), do: fun.()
   defp loaded_or(nil, fun), do: fun.()

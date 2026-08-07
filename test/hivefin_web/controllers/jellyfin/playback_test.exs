@@ -79,15 +79,17 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
            } = json_response(conn, 200)
 
     assert is_binary(session_id)
-    assert media_source["Id"] == Id.format(source.id)
+    # Jellyfin primary MediaSource.Id == Item.Id
+    assert media_source["Id"] == Id.format(movie.id)
+    assert media_source["ItemId"] == Id.format(movie.id)
     assert media_source["Container"] == "mp4"
     assert media_source["SupportsDirectPlay"] == true
     assert media_source["SupportsDirectStream"] == true
     refute Map.has_key?(media_source, "Path")
     assert is_binary(media_source["DirectStreamUrl"])
-    assert media_source["DirectStreamUrl"] =~ "/Videos/#{Id.format(source.id)}/stream"
+    assert media_source["DirectStreamUrl"] =~ "/Videos/#{Id.format(movie.id)}/stream"
     assert media_source["DirectStreamUrl"] =~ "api_key="
-    assert media_source["DirectStreamUrl"] =~ "MediaSourceId=#{Id.format(source.id)}"
+    assert media_source["DirectStreamUrl"] =~ "MediaSourceId=#{Id.format(movie.id)}"
     assert media_source["MediaStreams"] != []
 
     # Token in URL is valid for this user/item/source
@@ -351,8 +353,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
   test "PlaybackInfo DirectPlays when profile allows container and codecs", %{
     conn: conn,
-    movie: movie,
-    source: source
+    movie: movie
   } do
     body = %{
       "DeviceProfile" => %{
@@ -373,13 +374,13 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["SupportsDirectStream"] == true
     assert is_binary(ms["DirectStreamUrl"])
     assert ms["DirectStreamUrl"] =~ "Static=true"
-    assert ms["Id"] == Id.format(source.id)
+    assert ms["Id"] == Id.format(movie.id)
   end
 
   test "PlaybackInfo remuxes via HLS when container not allowed", %{
     conn: conn,
     movie: movie,
-    source: source
+    source: _source
   } do
     # Force remux: codecs ok, only mkv allowed as DirectPlay (fixture is mp4)
     body = %{
@@ -397,7 +398,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
 
     conn = post(conn, ~p"/Items/#{movie.id}/PlaybackInfo", body)
     assert %{"MediaSources" => [ms]} = json_response(conn, 200)
-    assert ms["Id"] == Id.format(source.id)
+    assert ms["Id"] == Id.format(movie.id)
     assert ms["SupportsDirectPlay"] == false
     # Must be false: vue builds Static=true stream.Container when true
     assert ms["SupportsDirectStream"] == false
