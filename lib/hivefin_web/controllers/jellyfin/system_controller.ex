@@ -23,6 +23,12 @@ defmodule HivefinWeb.Jellyfin.SystemController do
     |> send_resp(200, SystemInfo.product_name())
   end
 
+  @doc """
+  Quick Connect is not implemented; clients probe this during connect.
+  """
+  def quick_connect_enabled(conn, _params) do
+    json(conn, false)
+  end
 
   defp request_base_url(conn) do
     scheme = Atom.to_string(conn.scheme)

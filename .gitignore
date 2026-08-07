@@ -28,6 +28,10 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 hivefin-*.tar
 
+# Bundled from jellyfin/jellyfin image at Docker build time (not in git).
+/priv/jellyfin-web/**
+!/priv/jellyfin-web/.gitkeep
+
 # Ignore assets that are produced by build tools.
 /priv/static/assets/
 

@@ -1,12 +1,17 @@
 # syntax=docker/dockerfile:1
-# Hivefin production image: multi-stage mix release + ffmpeg runtime.
+# Hivefin production image: multi-stage mix release + ffmpeg runtime + jellyfin-web.
 
 ARG ELIXIR_VERSION=1.17.3
 ARG OTP_VERSION=27.2
 ARG DEBIAN_VERSION=bookworm-20250113-slim
+# Official image ships prebuilt jellyfin-web under /jellyfin/jellyfin-web
+ARG JELLYFIN_WEB_IMAGE=jellyfin/jellyfin:10.10.7
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
+
+# ---- jellyfin-web static assets (for official Android/TV WebView clients) ----
+FROM ${JELLYFIN_WEB_IMAGE} AS jellyfin-web
 
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -45,6 +50,10 @@ COPY priv priv
 COPY lib lib
 COPY assets assets
 COPY rel rel
+
+# Bundle official jellyfin-web (~60MB) so Android/TV WebView can load the UI
+# from the same origin as the API (required by official mobile clients).
+COPY --from=jellyfin-web /jellyfin/jellyfin-web priv/jellyfin-web
 
 # Pre-fetch Tailwind/esbuild with curl — OTP :httpc hits TLS key_usage errors
 # against GitHub release assets on some Docker Desktop/CA setups.

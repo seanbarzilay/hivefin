@@ -27,6 +27,14 @@ defmodule HivefinWeb.Endpoint do
     only: HivefinWeb.static_paths(),
     raise_on_missing_only: code_reloading?
 
+  # Bundled jellyfin-web UI (official Android app WebView loads server root).
+  # Docker builds populate priv/jellyfin-web; missing files pass through to router.
+  plug Plug.Static,
+    at: "/",
+    from: {:hivefin, "priv/jellyfin-web"},
+    gzip: false,
+    brotli: false
+
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
   if code_reloading? do

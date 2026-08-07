@@ -36,6 +36,13 @@ defmodule HivefinWeb.Router do
     get "/readyz", ReadyController, :show
   end
 
+  # Unauthenticated discovery helpers some mobile clients probe after connect.
+  scope "/", HivefinWeb.Jellyfin do
+    pipe_through :jellyfin_api
+
+    get "/QuickConnect/Enabled", SystemController, :quick_connect_enabled
+  end
+
   # Minimal operator console (session cookie; admin users only)
   scope "/admin", HivefinWeb.Admin do
     pipe_through :browser
@@ -139,5 +146,12 @@ defmodule HivefinWeb.Router do
 
   scope "/api", HivefinWeb do
     pipe_through :api
+  end
+
+  # Jellyfin web SPA: client-side routes fall through here after Plug.Static.
+  # Keep this last so it never steals API or admin routes.
+  scope "/", HivefinWeb do
+    get "/", WebClientController, :index
+    get "/*path", WebClientController, :index
   end
 end

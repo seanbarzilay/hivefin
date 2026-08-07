@@ -5,8 +5,9 @@
 #   # edit .env — set SECRET_KEY_BASE, admin password, media path
 #   docker compose up -d --build
 #
-# Admin:  http://HOST:4000/admin
-# API:    http://HOST:4000  (point jellyfin-vue / clients here)
+# Admin:     http://HOST:4000/admin
+# API + web: http://HOST:4000  (bundled jellyfin-web for official Android/TV apps)
+# jellyfin-vue can still point at the same API origin.
 #
 # Mount your media under ./media or set MEDIA_HOST_PATH in .env.
 
