@@ -344,7 +344,7 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["Id"] == Id.format(source.id)
   end
 
-  test "PlaybackInfo remuxes without claiming DirectPlay when container not allowed", %{
+  test "PlaybackInfo remuxes via HLS when container not allowed", %{
     conn: conn,
     movie: movie,
     source: source
@@ -371,13 +371,15 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["SupportsDirectStream"] == false
     assert ms["SupportsTranscoding"] == true
     assert is_binary(ms["TranscodingUrl"])
-    assert ms["TranscodingUrl"] =~ "stream.mp4"
+    # jellyfin-vue requires HLS for non-DirectPlay (always uses hls.js)
+    assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Static=false"
     refute ms["TranscodingUrl"] =~ "Transcode=true"
     refute Map.has_key?(ms, "Path")
   end
 
-  test "PlaybackInfo transcodes when video codec not allowed", %{
+  test "PlaybackInfo transcodes via HLS when video codec not allowed", %{
     conn: conn,
     movie: movie
   } do
@@ -399,7 +401,8 @@ defmodule HivefinWeb.Jellyfin.PlaybackTest do
     assert ms["SupportsDirectPlay"] == false
     assert ms["SupportsDirectStream"] == false
     assert ms["SupportsTranscoding"] == true
-    assert ms["TranscodingUrl"] =~ "stream.mp4"
+    assert ms["TranscodingSubProtocol"] == "hls"
+    assert ms["TranscodingUrl"] =~ "master.m3u8"
     assert ms["TranscodingUrl"] =~ "Transcode=true"
   end
 end
