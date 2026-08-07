@@ -6,6 +6,7 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   use HivefinWeb, :controller
 
   alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
+  alias Hivefin.Jellyfin.WsCommand
   alias Hivefin.Library.{LibraryContext, UserData}
   alias Hivefin.Sessions
 
@@ -136,6 +137,70 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
       conn
       |> put_status(:forbidden)
       |> json(%{"error" => "forbidden"})
+    end
+  end
+
+  @doc """
+  `POST /Sessions/:session_id/Playing` — tell a session to play items.
+  """
+  def play(conn, %{"session_id" => session_id} = params) do
+    user = conn.assigns.current_user
+
+    params
+    |> Map.drop(["session_id"])
+    |> then(&WsCommand.play(user.id, &1))
+    |> deliver(conn, session_id)
+  end
+
+  @doc """
+  `POST /Sessions/:session_id/Playing/:command` — pause/seek/stop a session.
+  """
+  def playstate(conn, %{"session_id" => session_id, "command" => command} = params) do
+    params
+    |> Map.drop(["session_id", "command"])
+    |> then(&WsCommand.playstate(command, &1))
+    |> deliver(conn, session_id)
+  end
+
+  @doc """
+  `POST /Sessions/:session_id/Command/:command` — a GeneralCommand.
+  """
+  def command(conn, %{"session_id" => session_id, "command" => command} = params) do
+    user = conn.assigns.current_user
+
+    command
+    |> WsCommand.general(user.id, Map.drop(params, ["session_id", "command"]))
+    |> deliver(conn, session_id)
+  end
+
+  @doc """
+  `POST /Sessions/:session_id/Message` — display a message on a session.
+  """
+  def message(conn, %{"session_id" => session_id} = params) do
+    user = conn.assigns.current_user
+    arguments = Map.take(params, ["Header", "Text", "TimeoutMs"])
+
+    "DisplayMessage"
+    |> WsCommand.general(user.id, arguments)
+    |> deliver(conn, session_id)
+  end
+
+  # No live socket for session_id is today's only capability signal (a live
+  # socket now reports SupportsMediaControl/SupportsRemoteControl: true, see
+  # Dto.Session.from_access_token/2's :controllable option) — so gate here by
+  # attempting the push, not by a separate controllable? lookup that would
+  # just re-derive the same fact from the registry.
+  defp deliver({:error, :invalid_command}, conn, _session_id) do
+    conn |> put_status(:bad_request) |> json(%{"error" => "invalid_command"})
+  end
+
+  defp deliver(message, conn, session_id) when is_map(message) do
+    case Sessions.push(session_id, message) do
+      :ok ->
+        send_resp(conn, :no_content, "")
+
+      {:error, :no_session} ->
+        conn |> put_status(:not_found) |> json(%{"error" => "no_session"})
     end
   end
 

@@ -164,6 +164,15 @@ defmodule HivefinWeb.Router do
     post "/Sessions/Playing/Progress", SessionsController, :progress
     post "/Sessions/Playing/Stopped", SessionsController, :stopped
 
+    # Remote-control command delivery. Declared after the literal
+    # /Sessions/Playing* reporting routes above (and before the SPA
+    # catch-all) so :session_id can never swallow those literal segments —
+    # see test/hivefin_web/controllers/jellyfin/sessions_command_test.exs.
+    post "/Sessions/:session_id/Playing", SessionsController, :play
+    post "/Sessions/:session_id/Playing/:command", SessionsController, :playstate
+    post "/Sessions/:session_id/Command/:command", SessionsController, :command
+    post "/Sessions/:session_id/Message", SessionsController, :message
+
     # Admin dashboard bootstrap stubs (must be JSON, not SPA HTML). We have no
     # scheduled tasks, no Live TV, no plugins, and no activity log — empty is
     # the honest answer, not a fabricated one.
