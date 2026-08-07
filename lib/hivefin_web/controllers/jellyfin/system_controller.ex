@@ -43,6 +43,15 @@ defmodule HivefinWeb.Jellyfin.SystemController do
     })
   end
 
+  @doc """
+  `GET /System/ActivityLog/Entries` — no activity log is recorded; return an
+  empty query result rather than falling through to the SPA (the dashboard
+  reads `.Items` on this response).
+  """
+  def activity_log_entries(conn, _params) do
+    json(conn, %{"Items" => [], "TotalRecordCount" => 0, "StartIndex" => 0})
+  end
+
   defp request_base_url(conn) do
     scheme = Atom.to_string(conn.scheme)
     host = conn.host
@@ -58,4 +67,3 @@ defmodule HivefinWeb.Jellyfin.SystemController do
     end
   end
 end
-

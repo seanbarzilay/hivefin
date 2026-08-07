@@ -163,6 +163,14 @@ defmodule HivefinWeb.Router do
     post "/Sessions/Playing", SessionsController, :playing
     post "/Sessions/Playing/Progress", SessionsController, :progress
     post "/Sessions/Playing/Stopped", SessionsController, :stopped
+
+    # Admin dashboard bootstrap stubs (must be JSON, not SPA HTML). We have no
+    # scheduled tasks, no Live TV, no plugins, and no activity log — empty is
+    # the honest answer, not a fabricated one.
+    get "/ScheduledTasks", ScheduledTasksController, :index
+    get "/LiveTv/Recordings", LiveTvController, :recordings
+    get "/web/ConfigurationPages", ConfigurationPagesController, :index
+    get "/System/ActivityLog/Entries", SystemController, :activity_log_entries
   end
 
   scope "/api", HivefinWeb do
