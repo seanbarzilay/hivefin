@@ -77,6 +77,22 @@ defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
     assert conn.resp_body == File.read!(path)
   end
 
+  test "GET Primary accepts undashed item ids and image Accept header", %{
+    conn: conn,
+    movie: movie,
+    file_path: path
+  } do
+    undashed = movie.id |> String.replace("-", "")
+
+    conn =
+      conn
+      |> put_req_header("accept", "image/avif,image/webp,image/*,*/*;q=0.8")
+      |> get("/Items/#{undashed}/Images/Primary")
+
+    assert conn.status == 200
+    assert conn.resp_body == File.read!(path)
+  end
+
   test "GET Backdrop returns 404 when missing", %{conn: conn, movie: movie} do
     conn = get(conn, ~p"/Items/#{movie.id}/Images/Backdrop")
     assert conn.status == 404

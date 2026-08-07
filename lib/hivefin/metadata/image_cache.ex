@@ -91,10 +91,14 @@ defmodule Hivefin.Metadata.ImageCache do
   defp tags_from_images(images) do
     Enum.reduce(images, %{}, fn
       %Image{type: :primary, id: id, local_path: path}, acc when is_binary(path) ->
-        if File.regular?(path), do: Map.put(acc, "Primary", id), else: acc
+        if File.regular?(path),
+          do: Map.put(acc, "Primary", Hivefin.Jellyfin.Id.format(id)),
+          else: acc
 
       %Image{type: :backdrop, id: id, local_path: path}, acc when is_binary(path) ->
-        if File.regular?(path), do: Map.put(acc, "Backdrop", id), else: acc
+        if File.regular?(path),
+          do: Map.put(acc, "Backdrop", Hivefin.Jellyfin.Id.format(id)),
+          else: acc
 
       _, acc ->
         acc

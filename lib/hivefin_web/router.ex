@@ -77,6 +77,15 @@ defmodule HivefinWeb.Router do
     get "/Videos/:item_id/hls/:session_id/:file", VideoController, :hls_segment
   end
 
+  # Binary images: browsers/vue send Accept: image/* — must not be JSON-only.
+  # Auth still required (JellyfinAuth reads header or api_key query).
+  scope "/", HivefinWeb.Jellyfin do
+    pipe_through [:jellyfin_stream, :jellyfin_auth]
+
+    get "/Items/:item_id/Images/:image_type", ImagesController, :show
+    get "/Items/:item_id/Images/:image_type/:image_index", ImagesController, :show
+  end
+
   scope "/", HivefinWeb.Jellyfin do
     pipe_through :jellyfin_api
 
@@ -100,7 +109,6 @@ defmodule HivefinWeb.Router do
     # GET /Items before /Items/:id so list is not captured as show
     get "/Items", ItemsController, :index
     get "/Items/:item_id/Similar", ItemsController, :similar
-    get "/Items/:item_id/Images/:image_type", ImagesController, :show
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
     get "/Items/:item_id", ItemsController, :show
 

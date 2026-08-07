@@ -1,6 +1,7 @@
 defmodule HivefinWeb.Jellyfin.ImagesController do
   use HivefinWeb, :controller
 
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Metadata.ImageCache
 
   @doc """
@@ -9,6 +10,8 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
   Returns 404 when no cache entry or file is missing.
   """
   def show(conn, %{"item_id" => item_id, "image_type" => image_type}) do
+    item_id = Id.coerce(item_id)
+
     case ImageCache.path_for(item_id, image_type) do
       {:ok, path} ->
         conn
