@@ -37,6 +37,9 @@ defmodule HivefinWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # Jellyfin Vue / other SPAs call the API from a different origin.
+  plug HivefinWeb.Plugs.CORS
+
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
@@ -47,3 +50,4 @@ defmodule HivefinWeb.Endpoint do
   plug Plug.Session, @session_options
   plug HivefinWeb.Router
 end
+

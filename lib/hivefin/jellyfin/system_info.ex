@@ -28,10 +28,13 @@ defmodule Hivefin.Jellyfin.SystemInfo do
 
   @doc """
   Public system info (unauthenticated). Minimal fields clients read at discovery.
+
+  Opts:
+  - `:local_address` — override advertised address (request host when known)
   """
-  def public_info do
+  def public_info(opts \\ []) do
     %{
-      "LocalAddress" => local_address(),
+      "LocalAddress" => Keyword.get(opts, :local_address) || local_address(),
       "ServerName" => server_name(),
       "Version" => version(),
       "ProductName" => product_name(),
@@ -43,8 +46,8 @@ defmodule Hivefin.Jellyfin.SystemInfo do
   @doc """
   Authenticated system info. Extends public info with safe host details.
   """
-  def info do
-    Map.merge(public_info(), %{
+  def info(opts \\ []) do
+    Map.merge(public_info(opts), %{
       "OperatingSystem" => :os.type() |> format_os(),
       "OperatingSystemDisplayName" => :os.type() |> format_os(),
       "CanSelfRestart" => false,
@@ -61,6 +64,7 @@ defmodule Hivefin.Jellyfin.SystemInfo do
       "CastReceiverApplications" => []
     })
   end
+
 
   defp default_local_address do
     "http://127.0.0.1:#{endpoint_port()}"
