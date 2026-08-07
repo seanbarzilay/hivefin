@@ -27,6 +27,13 @@ defmodule HivefinWeb.WebClientController do
         |> put_status(:not_found)
         |> json(%{"error" => "not_found"})
 
+      # Missing webpack chunks must 404 — not index.html (breaks dynamic import).
+      static_asset?(path_info) ->
+        conn
+        |> put_status(:not_found)
+        |> put_resp_content_type("text/plain")
+        |> send_resp(404, "not found")
+
       true ->
         serve_index(conn)
     end
@@ -58,6 +65,20 @@ defmodule HivefinWeb.WebClientController do
   end
 
   defp api_like?(_), do: false
+
+  defp static_asset?([]), do: false
+
+  defp static_asset?(path_info) when is_list(path_info) do
+    last = List.last(path_info) || ""
+
+    String.contains?(last, ".") and
+      String.downcase(Path.extname(last)) in ~w(
+        .js .css .map .json .woff .woff2 .ttf .eot .svg .png .jpg .jpeg .gif
+        .webp .ico .wasm .txt .xml
+      )
+  end
+
+  defp static_asset?(_), do: false
 
   defp index_path do
     Application.app_dir(:hivefin, "priv/jellyfin-web/index.html")

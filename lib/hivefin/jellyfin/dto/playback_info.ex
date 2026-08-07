@@ -18,6 +18,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
   ## Options
   - `:device_profile` — normalized profile or raw Jellyfin DeviceProfile map
   - `:play_session_id` — optional; generated if omitted
+  - `:stream_format` — `:hls` (default, jellyfin-vue) or `:progressive`
+    (jellyfin-web / Android WebView — native `<video>` progressive MP4)
   """
   def build(%Item{} = item, %User{} = user, opts \\ []) do
     profile =
@@ -33,6 +35,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
           DeviceProfile.default()
       end
 
+    stream_format = Keyword.get(opts, :stream_format, :hls)
+
     sources =
       case Map.get(item, :media_sources) do
         %Ecto.Association.NotLoaded{} -> []
@@ -44,7 +48,7 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
 
     media_sources =
       Enum.map(sources, fn source ->
-        from_media_source(source, item, user, profile, play_session_id)
+        from_media_source(source, item, user, profile, play_session_id, stream_format)
       end)
 
     %{
@@ -58,7 +62,8 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
          %Item{} = item,
          %User{} = user,
          profile,
-         play_session_id
+         play_session_id,
+         stream_format
        ) do
     {method, meta} = Decision.choose(source, profile)
     token = StreamToken.sign(user.id, item.id, source.id)
@@ -107,11 +112,11 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     }
 
     base
-    |> put_play_method(method, item.id, source.id, token, play_session_id, meta)
+    |> put_play_method(method, item.id, source.id, token, play_session_id, meta, stream_format)
     |> drop_nils()
   end
 
-  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta) do
+  defp put_play_method(base, :direct_play, item_id, source_id, token, _session, _meta, _fmt) do
     # jellyfin-web builds Videos/{itemId}/stream itself; still provide a
     # DirectStreamUrl for SDK clients. Path uses item id (JF convention).
     url = direct_stream_url(item_id, item_id, token, static: true)
@@ -131,13 +136,23 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     })
   end
 
-  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, _meta) do
-    # Remux only when DirectPlay is not allowed. jellyfin-vue always feeds
-    # non-DirectPlay URLs into hls.js, so this must be HLS (not progressive MP4).
-    # SupportsDirectStream stays false: vue treats it as Static=true original file.
-    # MediaSourceId query uses item id (matches advertised MediaSource.Id).
-    url = hls_url(item_id, item_id, token, session, transcode: false)
+  defp put_play_method(base, :direct_stream, item_id, source_id, token, session, _meta, stream_format) do
+    # Remux when container is wrong but codecs are OK.
+    # SupportsDirectStream stays false: vue treats true as Static=true original.
     _ = source_id
+    non_direct_play_urls(base, item_id, token, session, stream_format, transcode?: false)
+  end
+
+  defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta, stream_format) do
+    # Re-encode when codecs are not DirectPlay-compatible.
+    _ = source_id
+    non_direct_play_urls(base, item_id, token, session, stream_format, transcode?: true)
+  end
+
+  # jellyfin-vue → HLS (hls.js). jellyfin-web/Android WebView → progressive MP4
+  # (native <video> src; HLS often never issues a network request in that shell).
+  defp non_direct_play_urls(base, item_id, token, session, :progressive, opts) do
+    url = progressive_url(item_id, item_id, token, session, opts)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
@@ -145,17 +160,14 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
       "SupportsTranscoding" => true,
       "DirectStreamUrl" => nil,
       "TranscodingUrl" => url,
-      "TranscodingSubProtocol" => "hls",
-      "TranscodingContainer" => "ts",
+      "TranscodingSubProtocol" => "http",
+      "TranscodingContainer" => "mp4",
       "IsRemote" => false
     })
   end
 
-  defp put_play_method(base, :transcode, item_id, source_id, token, session, _meta) do
-    # Re-encode only when codecs are not DirectPlay-compatible.
-    # Must be HLS for jellyfin-vue (hls.js on every non-DirectPlay URL).
-    url = hls_url(item_id, item_id, token, session, transcode: true)
-    _ = source_id
+  defp non_direct_play_urls(base, item_id, token, session, _hls, opts) do
+    url = hls_url(item_id, item_id, token, session, opts)
 
     Map.merge(base, %{
       "SupportsDirectPlay" => false,
@@ -177,10 +189,18 @@ defmodule Hivefin.Jellyfin.Dto.PlaybackInfo do
     "/Videos/#{path_id}/stream?MediaSourceId=#{encode(media_source_id)}&Static=#{static}&api_key=#{encode(token)}"
   end
 
+  defp progressive_url(item_id, media_source_id, token, session, opts) do
+    item_id = Id.format(item_id)
+    media_source_id = Id.format(media_source_id)
+    transcode = if Keyword.get(opts, :transcode?, false), do: "&Transcode=true", else: ""
+
+    "/Videos/#{item_id}/stream.mp4?MediaSourceId=#{encode(media_source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
+  end
+
   defp hls_url(item_id, media_source_id, token, session, opts) do
     item_id = Id.format(item_id)
     media_source_id = Id.format(media_source_id)
-    transcode = if Keyword.get(opts, :transcode, false), do: "&Transcode=true", else: ""
+    transcode = if Keyword.get(opts, :transcode?, false), do: "&Transcode=true", else: ""
 
     "/Videos/#{item_id}/master.m3u8?MediaSourceId=#{encode(media_source_id)}&PlaySessionId=#{encode(session)}&api_key=#{encode(token)}&Static=false#{transcode}"
   end
