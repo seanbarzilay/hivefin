@@ -150,4 +150,19 @@ defmodule Hivefin.SessionsTest do
   test "put_state/2 on an unknown session reports no_session" do
     assert {:error, :no_session} = Sessions.put_state(Ecto.UUID.generate(), %{})
   end
+
+  test "update/2 from a process with no registration does not create an entry" do
+    id = Ecto.UUID.generate()
+    test = self()
+
+    spawn(fn ->
+      Sessions.update(id, %{position_ticks: 1})
+      send(test, :done)
+      Process.sleep(:infinity)
+    end)
+
+    assert_receive :done
+    assert Sessions.pids(id) == []
+    assert {:error, :no_session} = Sessions.push(id, %{})
+  end
 end
