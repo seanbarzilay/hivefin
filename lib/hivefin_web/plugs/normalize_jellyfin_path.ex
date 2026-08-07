@@ -23,6 +23,11 @@ defmodule HivefinWeb.Plugs.NormalizeJellyfinPath do
     ["branding", "css"] => ["Branding", "Css"],
     ["branding", "css.css"] => ["Branding", "Css"],
     ["quickconnect", "enabled"] => ["QuickConnect", "Enabled"],
+    ["startup", "configuration"] => ["Startup", "Configuration"],
+    ["localization", "cultures"] => ["Localization", "Cultures"],
+    ["localization", "options"] => ["Localization", "Options"],
+    ["localization", "countries"] => ["Localization", "Countries"],
+    ["localization", "parentalratings"] => ["Localization", "ParentalRatings"],
     ["userviews"] => ["UserViews"],
     ["useritems", "resume"] => ["UserItems", "Resume"],
     ["items"] => ["Items"],
@@ -74,6 +79,8 @@ defmodule HivefinWeb.Plugs.NormalizeJellyfinPath do
       "quickconnect" -> ["QuickConnect" | rest]
       "userviews" -> ["UserViews" | rest]
       "useritems" -> ["UserItems" | rest]
+      "startup" -> ["Startup" | rest]
+      "localization" -> ["Localization" | rest]
       _ -> [first | rest]
     end
   end

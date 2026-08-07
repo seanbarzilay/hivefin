@@ -107,6 +107,12 @@ defmodule HivefinWeb.Router do
     get "/Branding/Css.css", BrandingController, :css
     get "/Users/Public", UserController, :public_users
     post "/Users/AuthenticateByName", UserController, :authenticate_by_name
+    # Web UI bootstrap (must be JSON, not SPA HTML)
+    get "/Startup/Configuration", StartupController, :configuration
+    get "/Localization/Cultures", LocalizationController, :cultures
+    get "/Localization/Options", LocalizationController, :options
+    get "/Localization/Countries", LocalizationController, :countries
+    get "/Localization/ParentalRatings", LocalizationController, :parental_ratings
 
 
     pipe_through :jellyfin_auth

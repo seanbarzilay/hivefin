@@ -13,6 +13,7 @@ defmodule HivefinWeb.WebClientController do
     system users items videos sessions branding shows userviews useritems
     displaypreferences healthz readyz quickconnect admin api socket liveStreams
     livestreams libraries artists genres persons studios playbackinfo
+    startup localization web configuration playback
   )
 
   @doc """
