@@ -7,7 +7,7 @@ defmodule Hivefin.Library.PeopleContext do
   """
   import Ecto.Query
 
-  alias Hivefin.Library.{ItemPerson, Person}
+  alias Hivefin.Library.{Image, ItemPerson, Person}
   alias Hivefin.Repo
 
   @doc """
@@ -34,6 +34,22 @@ defmodule Hivefin.Library.PeopleContext do
         # keyed on [:item_id, :person_id, :type, :role], so without this the
         # second insert is a genuine duplicate-key error, not a race.
         |> Enum.uniq_by(fn {person, attrs} -> {person.id, attrs[:type], attrs[:role] || ""} end)
+
+      # Deterministic lock order: two movies sharing cast in a different
+      # credit order (franchise films, repeat collaborators), refreshed
+      # concurrently at Metadata.Queue's max_concurrency: 2, must take
+      # `people` row write locks (from update_profile_path/2's Repo.update)
+      # in the same order, or Postgres can deadlock them — one transaction
+      # gets aborted, Worker.refresh_item/1's rescue swallows it, and that
+      # movie silently keeps stale credits. Sorting by person id — the same
+      # value regardless of which movie's credit list mentions them first —
+      # guarantees a shared order. This looks pointless (nothing below
+      # depends on row order) until it's deleted and a franchise refresh
+      # deadlocks under concurrent load.
+      rows
+      |> Enum.uniq_by(fn {person, _attrs} -> person.id end)
+      |> Enum.sort_by(fn {person, _attrs} -> person.id end)
+      |> Enum.each(fn {person, attrs} -> update_profile_path(person, attrs[:profile_path]) end)
 
       Enum.each(rows, fn {person, attrs} ->
         changeset =
@@ -112,11 +128,11 @@ defmodule Hivefin.Library.PeopleContext do
         end
 
       person ->
-        # Backfills a previously-nil profile_path and follows TMDb if it
-        # changes a photo. Every refresh re-ingests full credits, so this is
-        # also how a cached-match re-apply (no new API call) populates
-        # profile_path on rows created before this column existed.
-        update_profile_path(person, attrs[:profile_path])
+        # profile_path is NOT updated here — see update_profile_path/2,
+        # called from replace_for_item/2's separate, deterministically
+        # sorted pass (lock-ordering, avoids a deadlock across concurrent
+        # movie refreshes).
+        person
     end
   end
 
@@ -129,15 +145,48 @@ defmodule Hivefin.Library.PeopleContext do
     person
   end
 
+  # Backfills a previously-nil profile_path, or follows TMDb if it changes a
+  # photo. Every refresh re-ingests full credits, so this is also how a
+  # cached-match re-apply (no new API call) populates profile_path on rows
+  # created before this column existed.
+  #
+  # Called from replace_for_item/2's deterministically-sorted pass, never
+  # inline during upsert_person/1 — see the lock-ordering comment there.
+  #
+  # A no-op (returns person unchanged) when profile_path is nil or
+  # unchanged, so a normal re-refresh with identical data does zero writes.
   defp update_profile_path(person, profile_path)
        when is_binary(profile_path) and person.profile_path != profile_path do
     case person |> Person.changeset(%{profile_path: profile_path}) |> Repo.update() do
-      {:ok, updated} -> updated
-      {:error, _changeset} -> person
+      {:ok, updated} ->
+        invalidate_cached_image(updated)
+        updated
+
+      {:error, _changeset} ->
+        person
     end
   end
 
   defp update_profile_path(person, _profile_path), do: person
+
+  # A changed profile_path (TMDb swapped the photo, or a previously-nil path
+  # got backfilled) makes any cached headshot — or the negative-cache marker
+  # ImageCache.store_person/2 persists after a confirmed failed fetch
+  # (`local_path: nil`) — stale. Deleting the Image row is what makes
+  # ImagesController's next request a genuine miss instead of serving the
+  # old photo or staying blocked by an old failure; ImageCache re-downloads
+  # and overwrites the same on-disk path from there.
+  defp invalidate_cached_image(%Person{id: person_id}) do
+    case Repo.get_by(Image, person_id: person_id, type: :primary) do
+      nil ->
+        :ok
+
+      image ->
+        if is_binary(image.local_path), do: File.rm(image.local_path)
+        Repo.delete(image)
+        :ok
+    end
+  end
 
   defp person_by_tmdb_id(key) do
     from(p in Person, where: fragment("? ->> 'Tmdb' = ?", p.provider_ids, ^key))
