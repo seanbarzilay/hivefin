@@ -62,6 +62,7 @@ defmodule Hivefin.Metadata.TMDB do
       case size do
         :poster -> "w500"
         :backdrop -> "w1280"
+        :profile -> "w185"
         :original -> "original"
         other when is_binary(other) -> other
         _ -> "w500"

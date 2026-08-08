@@ -132,6 +132,38 @@ defmodule Hivefin.Library.PeopleContextTest do
     refute is_nil(db_role)
   end
 
+  test "headshot_targets pairs stored people with their profile_path by TMDb id" do
+    item = make_item("102 Dalmatians")
+    assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
+
+    targets = PeopleContext.headshot_targets(item.id, people())
+    assert length(targets) == 1
+
+    [{person_id, profile_path}] = targets
+    assert profile_path == "/c.jpg"
+
+    glenn = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Glenn Close"))
+    assert person_id == glenn.person.id
+  end
+
+  test "headshot_targets omits people with no profile_path" do
+    item = make_item("102 Dalmatians")
+    assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
+
+    kevin_only = [
+      %{
+        tmdb_id: 1,
+        name: "Kevin Lima",
+        role: "",
+        type: "Director",
+        sort_order: nil,
+        profile_path: nil
+      }
+    ]
+
+    assert PeopleContext.headshot_targets(item.id, kevin_only) == []
+  end
+
   test "two crew jobs collapsing to the same type and role insert without raising" do
     item = make_item("102 Dalmatians")
 

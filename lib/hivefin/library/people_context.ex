@@ -67,6 +67,29 @@ defmodule Hivefin.Library.PeopleContext do
   end
 
   @doc """
+  Pairs stored people with the `profile_path` from their TMDb credit entry.
+
+  Returns `[{person_id, profile_path}]` for people who have one. Matching is by
+  TMDb id, which is also the dedup key, so this is exact.
+  """
+  def headshot_targets(item_id, people) when is_binary(item_id) and is_list(people) do
+    by_tmdb_id =
+      people
+      |> Enum.reject(&is_nil(&1[:profile_path]))
+      |> Map.new(fn p -> {to_string(p[:tmdb_id]), p[:profile_path]} end)
+
+    item_id
+    |> list_for_item()
+    |> Enum.flat_map(fn %{person: person} ->
+      case Map.fetch(by_tmdb_id, person.provider_ids["Tmdb"]) do
+        {:ok, profile_path} -> [{person.id, profile_path}]
+        :error -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  @doc """
   The `item_people` query, cast-before-crew ordered with `:person` preloaded.
 
   Shared with `LibraryContext.item_preloads/1` so a batch preload across a

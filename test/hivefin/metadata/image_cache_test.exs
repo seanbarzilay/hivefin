@@ -94,6 +94,37 @@ defmodule Hivefin.Metadata.ImageCacheTest do
     assert File.read!(path) == "already-cached-bytes"
   end
 
+  test "store_person skips the download when the image is already cached on disk", %{
+    cache_dir: dir
+  } do
+    # No Req.Test.stub configured for this test's TMDB plug: a stub with no
+    # match clause makes Req.Test raise, so any HTTP attempt fails the test
+    # loudly instead of silently passing.
+    {:ok, person} =
+      %Hivefin.Library.Person{}
+      |> Hivefin.Library.Person.changeset(%{name: "Glenn Close"})
+      |> Repo.insert()
+
+    path = Path.join([dir, person.id, "primary.jpg"])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "already-cached-bytes")
+
+    {:ok, _image} =
+      %Image{}
+      |> Image.changeset(%{
+        person_id: person.id,
+        type: :primary,
+        local_path: path,
+        provider: "tmdb"
+      })
+      |> Repo.insert()
+
+    assert {:ok, ^path} =
+             ImageCache.store_person(person.id, "https://image.tmdb.org/t/p/w185/x.jpg")
+
+    assert File.read!(path) == "already-cached-bytes"
+  end
+
   test "store re-downloads when the cached row's file is missing from disk", %{
     item: item,
     cache_dir: dir

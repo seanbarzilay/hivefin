@@ -151,6 +151,58 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
     assert Enum.map(dto["People"], & &1["Type"]) == ["Actor", "Director"]
   end
 
+  test "PrimaryImageTag also appears through the batch-preloaded list path", %{library: library} do
+    # people_for/1 has two clauses (preloaded item_people vs. list_for_item/1
+    # fallback) sharing one person_entry/1 — this guards against a future
+    # edit that duplicates that logic and only updates one clause.
+    {:ok, item} =
+      %Item{}
+      |> Item.changeset(%{
+        name: "Preload Image",
+        type: :movie,
+        sort_name: "preload image",
+        library_id: library.id
+      })
+      |> Repo.insert()
+
+    {:ok, _} =
+      PeopleContext.replace_for_item(item.id, [
+        %{
+          tmdb_id: 9999,
+          name: "Headshot Haver",
+          role: "Someone",
+          type: "Actor",
+          sort_order: 0,
+          profile_path: "/x.jpg"
+        }
+      ])
+
+    [entry] = PeopleContext.list_for_item(item.id)
+
+    path = Path.join(System.tmp_dir!(), "hs-preload-#{entry.person.id}.jpg")
+    File.write!(path, "not-really-a-jpeg")
+    on_exit(fn -> File.rm(path) end)
+
+    {:ok, _} =
+      %Hivefin.Library.Image{}
+      |> Hivefin.Library.Image.changeset(%{
+        person_id: entry.person.id,
+        type: :primary,
+        local_path: path
+      })
+      |> Repo.insert()
+
+    {entries, _total} = LibraryContext.list_items_for_parent(library.id, preload_people: true)
+    loaded_item = Enum.find(entries, &(&1.id == item.id))
+    assert is_list(loaded_item.item_people)
+
+    dto = BaseItem.from_item(loaded_item, fields: ["People"])
+    [person] = dto["People"]
+
+    assert person["PrimaryImageTag"]
+    refute is_nil(person["PrimaryImageTag"])
+  end
+
   test "a listing without Fields=People never queries item_people", %{library: library} do
     # item_people is Fields-gated for a reason: at this server's real scale
     # (7k+ movies), preloading it unconditionally means materializing and
@@ -202,5 +254,38 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
     dto = BaseItem.from_item(bare_item, fields: ["People"])
 
     assert dto["People"] == []
+  end
+
+  test "a person with a cached image gets a PrimaryImageTag", %{item: item} do
+    [entry | _] = PeopleContext.list_for_item(item.id)
+
+    path = Path.join(System.tmp_dir!(), "hs-#{entry.person.id}.jpg")
+    File.write!(path, "not-really-a-jpeg")
+
+    {:ok, _} =
+      %Hivefin.Library.Image{}
+      |> Hivefin.Library.Image.changeset(%{
+        person_id: entry.person.id,
+        type: :primary,
+        local_path: path
+      })
+      |> Repo.insert()
+
+    dto = BaseItem.from_item(item, fields: ["People"])
+    person = Enum.find(dto["People"], &(&1["Id"] == Hivefin.Jellyfin.Id.format(entry.person.id)))
+
+    assert person["PrimaryImageTag"]
+    refute is_nil(person["PrimaryImageTag"])
+
+    File.rm(path)
+  end
+
+  test "a person with no image omits PrimaryImageTag rather than sending null", %{item: item} do
+    dto = BaseItem.from_item(item, fields: ["People"])
+
+    for p <- dto["People"] do
+      refute Map.has_key?(p, "PrimaryImageTag") and is_nil(p["PrimaryImageTag"]),
+             "PrimaryImageTag must be absent, not null"
+    end
   end
 end

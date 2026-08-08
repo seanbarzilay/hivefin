@@ -156,12 +156,19 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     # jellyfin-sdk-kotlin, but jellyfin-web dereferences optional fields with
     # no guard — the same trap that produced the PlayState and AdditionalUsers
     # crashes.
-    %{
+    base = %{
       "Id" => Id.format(entry.person.id),
       "Name" => entry.person.name,
       "Role" => entry.role || "",
       "Type" => entry.type
     }
+
+    # PrimaryImageTag is omitted, never null, when the person has no cached
+    # headshot — jellyfin-web dereferences it without a null guard.
+    case ImageCache.image_tags_for(entry.person.id) do
+      %{"Primary" => tag} -> Map.put(base, "PrimaryImageTag", tag)
+      _ -> base
+    end
   end
 
   defp load_sources(item, opts) do
