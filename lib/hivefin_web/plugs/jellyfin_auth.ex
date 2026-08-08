@@ -49,13 +49,22 @@ defmodule HivefinWeb.Plugs.JellyfinAuth do
     end
   end
 
+  # Raw-token headers Jellyfin accepts, besides the MediaBrowser auth header.
+  # x-mediabrowser-token is not optional: jellyfin-apiclient's
+  # validateAuthentication/1 — the call that checks a *stored* session on page
+  # load — sends the token only in that header. Rejecting it makes the client
+  # clear its saved credentials and drop to the sign-in screen, so "remember me"
+  # appears broken and every refresh or app restart demands a fresh login.
+  @token_headers ~w(x-emby-token x-mediabrowser-token)
+
   defp header_token(conn) do
     with :error <- media_browser_token(conn) do
-      # Jellyfin also accepts the raw token in X-Emby-Token.
-      case get_req_header(conn, "x-emby-token") do
-        [token | _] when is_binary(token) and token != "" -> {:ok, token}
-        _ -> :error
-      end
+      Enum.find_value(@token_headers, :error, fn header ->
+        case get_req_header(conn, header) do
+          [token | _] when is_binary(token) and token != "" -> {:ok, token}
+          _ -> nil
+        end
+      end)
     end
   end
 
