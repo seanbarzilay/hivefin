@@ -42,7 +42,7 @@ defmodule Hivefin.Metadata.TMDB do
         {:ok, normalize_details(payload)}
 
       _ ->
-        case get("/movie/#{tmdb_id}", %{}) do
+        case get("/movie/#{tmdb_id}", %{"append_to_response" => "credits"}) do
           {:ok, body} ->
             _ = ProviderCache.put(@provider, cache_key, body)
             {:ok, normalize_details(body)}
@@ -157,6 +157,71 @@ defmodule Hivefin.Metadata.TMDB do
   defp inspect_safe(reason) when is_atom(reason), do: inspect(reason)
   defp inspect_safe(reason), do: redact_secrets(reason)
 
+  # TMDb `job` -> Jellyfin PersonKind. Deliberately small: TMDb returns 100+
+  # crew rows per film (grips, runners, casting assistants) and Jellyfin
+  # clients render none of them. Jobs absent from this map are DROPPED, not
+  # mapped to "Unknown", so the table only holds rows a client will show.
+  @crew_kinds %{
+    "Director" => "Director",
+    "Writer" => "Writer",
+    "Screenplay" => "Writer",
+    "Story" => "Writer",
+    "Producer" => "Producer",
+    "Executive Producer" => "Producer",
+    "Original Music Composer" => "Composer"
+  }
+
+  @doc """
+  Extracts cast and crew from a TMDb details payload.
+
+  Returns `[]` for a payload without a `"credits"` key — entries cached before
+  `append_to_response=credits` was added still flow through here.
+  """
+  def credits_from_payload(%{"credits" => %{} = credits}) do
+    cast =
+      credits
+      |> Map.get("cast", [])
+      |> Enum.map(fn c ->
+        %{
+          tmdb_id: c["id"],
+          name: c["name"],
+          role: c["character"] || "",
+          type: "Actor",
+          sort_order: c["order"] || 0,
+          profile_path: c["profile_path"]
+        }
+      end)
+      |> Enum.sort_by(& &1.sort_order)
+
+    crew =
+      credits
+      |> Map.get("crew", [])
+      |> Enum.flat_map(fn c ->
+        case Map.fetch(@crew_kinds, c["job"]) do
+          {:ok, kind} ->
+            [
+              %{
+                tmdb_id: c["id"],
+                name: c["name"],
+                # "" not nil — jellyfin-web may call .length on Role.
+                role: "",
+                type: kind,
+                sort_order: nil,
+                profile_path: c["profile_path"]
+              }
+            ]
+
+          :error ->
+            []
+        end
+      end)
+
+    (cast ++ crew)
+    |> Enum.reject(&(is_nil(&1.tmdb_id) or is_nil(&1.name)))
+  end
+
+  def credits_from_payload(_), do: []
+
   defp normalize_search_result(result) when is_map(result) do
     %{
       tmdb_id: result["id"],
@@ -177,7 +242,8 @@ defmodule Hivefin.Metadata.TMDB do
       production_year: year_from_date(body["release_date"]),
       poster_path: body["poster_path"],
       backdrop_path: body["backdrop_path"],
-      premiere_date: parse_date(body["release_date"])
+      premiere_date: parse_date(body["release_date"]),
+      people: credits_from_payload(body)
     }
   end
 
