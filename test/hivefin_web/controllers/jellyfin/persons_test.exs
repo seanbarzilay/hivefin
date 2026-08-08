@@ -285,6 +285,16 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
     end
   end
 
+  test "GET /Persons?Filters=IsFavorite returns an empty page", %{conn: conn} do
+    # jellyfin-web's Favorites tab fetches this for its "People" row and
+    # un-hides the row if anything comes back. hivefin has no person
+    # favorites, so it must come back empty.
+    body = json_response(get(conn, "/Persons?Filters=IsFavorite&Limit=20"), 200)
+
+    assert body["Items"] == []
+    assert body["TotalRecordCount"] == 0
+  end
+
   # Exactly how the client gets a person id: off a DTO, dashless, never
   # constructed test-side.
   defp person_id_from_listing(conn, name) do

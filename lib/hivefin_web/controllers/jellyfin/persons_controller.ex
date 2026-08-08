@@ -22,16 +22,39 @@ defmodule HivefinWeb.Jellyfin.PersonsController do
     start_index =
       Params.clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
 
-    limit = Params.clamp_non_neg(parse_int(params["Limit"] || params["limit"]))
-    search = params["SearchTerm"] || params["searchTerm"]
+    if favorites_only?(params) do
+      json(conn, BaseItem.query_result([], 0, start_index))
+    else
+      limit = Params.clamp_non_neg(parse_int(params["Limit"] || params["limit"]))
+      search = params["SearchTerm"] || params["searchTerm"]
 
-    {people, total} =
-      PeopleContext.list_people(start_index: start_index, limit: limit, search_term: search)
+      {people, total} =
+        PeopleContext.list_people(start_index: start_index, limit: limit, search_term: search)
 
-    json(
-      conn,
-      BaseItem.query_result(Enum.map(people, &BaseItem.from_person/1), total, start_index)
-    )
+      json(
+        conn,
+        BaseItem.query_result(Enum.map(people, &BaseItem.from_person/1), total, start_index)
+      )
+    end
+  end
+
+  # jellyfin-web's Favorites tab renders a "People" section
+  # ({name: "People", types: "Person"}) whose fetcher is
+  # `apiClient.getPeople(userId, {Filters: "IsFavorite", ..., Limit: 20})` —
+  # i.e. GET /Persons?Filters=IsFavorite&Limit=20 — and emby-itemscontainer
+  # un-hides any section whose response came back with items. hivefin has no
+  # person favorites, and ignoring `Filters` would drop 20 arbitrary cast
+  # members onto every user's Favorites page. Before /Persons existed the
+  # request 404'd and the section stayed hidden; an empty page keeps that
+  # outcome without inventing a favorites feature.
+  #
+  # `IsFavorite=true` is the same question from list.html's person view
+  # (list.js sends it instead of `Filters`), so it gets the same answer.
+  defp favorites_only?(params) do
+    filters = to_string(params["Filters"] || params["filters"] || "")
+    is_favorite = to_string(params["IsFavorite"] || params["isFavorite"] || "")
+
+    String.contains?(filters, "IsFavorite") or String.downcase(is_favorite) == "true"
   end
 
   @doc """
