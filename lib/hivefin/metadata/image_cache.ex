@@ -44,22 +44,61 @@ defmodule Hivefin.Metadata.ImageCache do
 
   def store(_, _, _), do: {:error, :invalid_args}
 
-  defp cached_path(item_id, type) do
-    case get_image(item_id, type) do
-      %Image{local_path: path} when is_binary(path) ->
-        if File.regular?(path), do: {:ok, path}, else: :miss
+  @doc """
+  Downloads and caches a person's headshot into the cache dir. Always
+  `:primary` — persons have no backdrop.
 
-      _ ->
-        :miss
+  Skips the download the same way `store/3` does: an existing `Image` row
+  for `person_id` with a file still on disk is reused rather than
+  re-fetched on every metadata refresh.
+
+  Returns `{:ok, absolute_path}` or `{:error, reason}`.
+  """
+  @spec store_person(Ecto.UUID.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def store_person(person_id, url) when is_binary(person_id) and is_binary(url) do
+    case cached_person_path(person_id) do
+      {:ok, path} ->
+        {:ok, path}
+
+      :miss ->
+        with :ok <- ensure_cache_dir(),
+             {:ok, body, content_type} <- download(url),
+             ext <- extension_for(url, content_type),
+             path <- cache_path(person_id, :primary, ext),
+             :ok <- write_file(path, body),
+             {:ok, _image} <- upsert_person_image(person_id, path) do
+          {:ok, path}
+        end
     end
   end
 
+  def store_person(_, _), do: {:error, :invalid_args}
+
+  defp cached_path(item_id, type) do
+    path_from_image(get_image(item_id, type))
+  end
+
+  defp cached_person_path(person_id) do
+    path_from_image(get_person_image(person_id, :primary))
+  end
+
+  defp path_from_image(%Image{local_path: path}) when is_binary(path) do
+    if File.regular?(path), do: {:ok, path}, else: :miss
+  end
+
+  defp path_from_image(_), do: :miss
+
   @doc """
   Returns the absolute path for a cached image, or `:error`.
+
+  `id` may be an item id or a person id — `ImagesController` serves person
+  headshots from `/Items/{personId}/Images/Primary`, matching upstream
+  Jellyfin where persons are items. Items are resolved before people, so an
+  id that (impossibly, today) matched both would prefer the item.
   """
   @spec path_for(Ecto.UUID.t(), :primary | :backdrop | String.t()) ::
           {:ok, String.t()} | :error
-  def path_for(item_id, type) when is_binary(item_id) do
+  def path_for(id, type) when is_binary(id) do
     type = normalize_type(type)
 
     case type do
@@ -67,7 +106,9 @@ defmodule Hivefin.Metadata.ImageCache do
         :error
 
       type ->
-        case get_image(item_id, type) do
+        image = get_image(id, type) || get_person_image(id, type)
+
+        case image do
           %Image{local_path: path} when is_binary(path) ->
             if File.regular?(path), do: {:ok, path}, else: :error
 
@@ -132,30 +173,45 @@ defmodule Hivefin.Metadata.ImageCache do
     Repo.get_by(Image, item_id: item_id, type: type)
   end
 
+  defp get_person_image(person_id, type) do
+    Repo.get_by(Image, person_id: person_id, type: type)
+  end
+
   defp upsert_image(item_id, type, path) do
-    attrs = %{
+    upsert(get_image(item_id, type), %{
       item_id: item_id,
       type: type,
       local_path: path,
       provider: "tmdb"
-    }
+    })
+  end
 
-    case Repo.get_by(Image, item_id: item_id, type: type) do
-      nil ->
-        %Image{}
-        |> Image.changeset(attrs)
-        |> Repo.insert()
+  defp upsert_person_image(person_id, path) do
+    upsert(get_person_image(person_id, :primary), %{
+      person_id: person_id,
+      type: :primary,
+      local_path: path,
+      provider: "tmdb"
+    })
+  end
 
-      existing ->
-        # Remove previous file if path changed
-        if is_binary(existing.local_path) and existing.local_path != path do
-          _ = File.rm(existing.local_path)
-        end
+  defp upsert(existing, attrs)
 
-        existing
-        |> Image.changeset(attrs)
-        |> Repo.update()
+  defp upsert(nil, attrs) do
+    %Image{}
+    |> Image.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  defp upsert(existing, attrs) do
+    # Remove previous file if path changed
+    if is_binary(existing.local_path) and existing.local_path != attrs.local_path do
+      _ = File.rm(existing.local_path)
     end
+
+    existing
+    |> Image.changeset(attrs)
+    |> Repo.update()
   end
 
   defp download(url) do
