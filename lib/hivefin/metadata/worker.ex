@@ -142,9 +142,22 @@ defmodule Hivefin.Metadata.Worker do
       |> maybe_put(:production_year, match[:production_year] || item.production_year)
       |> maybe_put(:premiere_date, match[:premiere_date] || item.premiere_date)
 
-    item
-    |> Item.changeset(attrs)
-    |> Repo.update()
+    result =
+      item
+      |> Item.changeset(attrs)
+      |> Repo.update()
+
+    # People are stored separately from the item's own columns; a credits
+    # failure must not roll back the item metadata we just wrote.
+    case match[:people] do
+      people when is_list(people) and people != [] ->
+        _ = Hivefin.Library.PeopleContext.replace_for_item(item.id, people)
+
+      _ ->
+        :ok
+    end
+
+    result
   end
 
   defp maybe_put(map, _key, nil), do: map
