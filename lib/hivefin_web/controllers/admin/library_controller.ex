@@ -132,7 +132,13 @@ defmodule HivefinWeb.Admin.LibraryController do
   end
 
   def refresh_metadata(conn, _params) do
-    count = MetadataWorker.enqueue_missing_movies()
+    # Bounded per press: on the live 7,278-movie library this query can match
+    # the whole library in one shot (list_missing_movie_ids/1 now also flags
+    # movies with no credits yet). Unbounded, that's ~7.3k TMDb calls and
+    # ~14.5k unrated image downloads from a single click. order_by: [asc:
+    # i.name] in list_missing_movie_ids/1 makes repeated presses walk the
+    # library deterministically instead of re-picking the same 500.
+    count = MetadataWorker.enqueue_missing_movies(limit: 500)
 
     msg =
       if count == 0 do

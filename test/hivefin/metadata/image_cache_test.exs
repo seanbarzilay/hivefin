@@ -1,9 +1,10 @@
 defmodule Hivefin.Metadata.ImageCacheTest do
   use Hivefin.DataCase, async: false
 
-  alias Hivefin.Library.LibraryContext
+  alias Hivefin.Library.{Image, LibraryContext}
   alias Hivefin.Metadata.ImageCache
   alias Hivefin.Metadata.TMDB
+  alias Hivefin.Repo
 
   setup do
     Req.Test.verify_on_exit!()
@@ -69,5 +70,59 @@ defmodule Hivefin.Metadata.ImageCacheTest do
   test "store rejects invalid type", %{item: item} do
     assert {:error, :invalid_args} =
              ImageCache.store(item.id, :thumb, "https://example.com/x.jpg")
+  end
+
+  test "store skips the download when the image is already cached on disk", %{
+    item: item,
+    cache_dir: dir
+  } do
+    # No Req.Test.stub configured for this test's TMDB plug: a stub with no
+    # match clause makes Req.Test raise, so any HTTP attempt fails the test
+    # loudly instead of silently passing.
+    path = Path.join([dir, item.id, "primary.jpg"])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "already-cached-bytes")
+
+    {:ok, _image} =
+      %Image{}
+      |> Image.changeset(%{item_id: item.id, type: :primary, local_path: path, provider: "tmdb"})
+      |> Repo.insert()
+
+    assert {:ok, ^path} =
+             ImageCache.store(item.id, :primary, "https://image.tmdb.org/t/p/w500/x.jpg")
+
+    assert File.read!(path) == "already-cached-bytes"
+  end
+
+  test "store re-downloads when the cached row's file is missing from disk", %{
+    item: item,
+    cache_dir: dir
+  } do
+    body = "freshly-downloaded-bytes"
+
+    Req.Test.stub(TMDB, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("image/jpeg")
+      |> Plug.Conn.send_resp(200, body)
+    end)
+
+    stale_path = Path.join([dir, item.id, "primary.jpg"])
+
+    {:ok, _image} =
+      %Image{}
+      |> Image.changeset(%{
+        item_id: item.id,
+        type: :primary,
+        local_path: stale_path,
+        provider: "tmdb"
+      })
+      |> Repo.insert()
+
+    refute File.exists?(stale_path)
+
+    assert {:ok, path} =
+             ImageCache.store(item.id, :primary, "https://image.tmdb.org/t/p/w500/x.jpg")
+
+    assert File.read!(path) == body
   end
 end

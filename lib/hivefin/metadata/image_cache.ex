@@ -13,23 +13,46 @@ defmodule Hivefin.Metadata.ImageCache do
   @doc """
   Downloads `url` into the cache for `item_id` / `type` (`:primary` | `:backdrop`).
 
+  Skips the download and returns the existing path when an `Image` row
+  already exists for `(item_id, type)` and its file is still on disk — the
+  common case on every metadata refresh after the first. This is the only
+  caller of `ImageCache.store/3` in the codebase (both `Worker.maybe_store_images/2`
+  call sites), so there's no other consumer relying on the old
+  always-redownload behavior to pick up a changed provider image.
+
   Returns `{:ok, absolute_path}` or `{:error, reason}`.
   """
   @spec store(Ecto.UUID.t(), :primary | :backdrop, String.t()) ::
           {:ok, String.t()} | {:error, term()}
   def store(item_id, type, url)
       when is_binary(item_id) and type in [:primary, :backdrop] and is_binary(url) do
-    with :ok <- ensure_cache_dir(),
-         {:ok, body, content_type} <- download(url),
-         ext <- extension_for(url, content_type),
-         path <- cache_path(item_id, type, ext),
-         :ok <- write_file(path, body),
-         {:ok, _image} <- upsert_image(item_id, type, path) do
-      {:ok, path}
+    case cached_path(item_id, type) do
+      {:ok, path} ->
+        {:ok, path}
+
+      :miss ->
+        with :ok <- ensure_cache_dir(),
+             {:ok, body, content_type} <- download(url),
+             ext <- extension_for(url, content_type),
+             path <- cache_path(item_id, type, ext),
+             :ok <- write_file(path, body),
+             {:ok, _image} <- upsert_image(item_id, type, path) do
+          {:ok, path}
+        end
     end
   end
 
   def store(_, _, _), do: {:error, :invalid_args}
+
+  defp cached_path(item_id, type) do
+    case get_image(item_id, type) do
+      %Image{local_path: path} when is_binary(path) ->
+        if File.regular?(path), do: {:ok, path}, else: :miss
+
+      _ ->
+        :miss
+    end
+  end
 
   @doc """
   Returns the absolute path for a cached image, or `:error`.
