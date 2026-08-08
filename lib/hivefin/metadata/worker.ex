@@ -86,13 +86,13 @@ defmodule Hivefin.Metadata.Worker do
   end
 
   @doc """
-  Movie ids missing provider metadata and/or a primary image row.
+  Movie ids missing provider metadata, a primary image row, and/or credits.
   """
   @spec list_missing_movie_ids(pos_integer() | nil) :: [Ecto.UUID.t()]
   def list_missing_movie_ids(limit \\ nil) do
     import Ecto.Query
 
-    alias Hivefin.Library.Image
+    alias Hivefin.Library.{Image, ItemPerson}
 
     q =
       from(i in Item,
@@ -100,9 +100,21 @@ defmodule Hivefin.Metadata.Worker do
         left_join: img in Image,
         on: img.item_id == i.id and img.type == :primary,
         where: i.type == :movie,
+        # A movie qualifies as "missing metadata" if it has no poster, no
+        # provider match, OR no credits. That third branch is the backfill:
+        # the library was matched to TMDb before cast & crew shipped, so
+        # every movie already has a poster and provider_ids and would
+        # otherwise never re-qualify. NOT EXISTS (not another left_join)
+        # because item_people is one-to-many and a join would multiply rows
+        # before the select. Movies TMDb genuinely has no credits for will
+        # re-qualify on every call — acceptable, since this only runs
+        # admin-triggered and is bounded by the queue and rate limiter.
         where:
           is_nil(img.id) or is_nil(i.provider_ids) or
-            fragment("coalesce(?::text, '{}') IN ('{}', 'null')", i.provider_ids),
+            fragment("coalesce(?::text, '{}') IN ('{}', 'null')", i.provider_ids) or
+            not exists(
+              from(ip in ItemPerson, where: ip.item_id == parent_as(:item).id, select: 1)
+            ),
         select: i.id,
         order_by: [asc: i.name]
       )
