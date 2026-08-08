@@ -10,9 +10,13 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
   # RateLimiter sustains 4/sec; at that rate a full cap drains in ~2.5s
   # worst case instead of growing toward RateLimiter.checkout/1's 120s call
   # timeout. 10 comfortably exceeds a single browser's 6-sockets-per-origin
-  # ceiling (HTTP/1.1), so one legitimate user opening one cast page is very
-  # unlikely to ever get capped — only genuine bursts (many concurrent
-  # pageviews, or abuse of this unauthenticated route) are.
+  # ceiling on plain HTTP/1.1 (this deployment's default — see
+  # config/runtime.exs), so one legitimate user opening one cast page is
+  # very unlikely to ever get capped there — only genuine bursts (many
+  # concurrent pageviews, or abuse of this unauthenticated route) are.
+  # Behind a TLS-terminating HTTP/2 proxy there's no 6-socket ceiling, so a
+  # single cold 40-cast page COULD exceed 10 — not a correctness problem,
+  # a capped request just 404s uncached and self-heals on the next view.
   @max_concurrent_headshot_fetches 10
   @headshot_gate_key {__MODULE__, :headshot_fetch_gate}
 
@@ -68,10 +72,12 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
     end
   end
 
-  # Two concurrent requests for the same uncached face can both download;
-  # the loser hits images_person_id_type_unique_index and store_person/2
-  # returns {:error, changeset} (not a raise) — self-healing, since the
-  # winner's row already makes the next request a cache hit.
+  # Two concurrent requests for the same uncached face can both attempt a
+  # download; the loser's own Repo.insert hits
+  # images_person_id_type_unique_index. store_person/2 handles that case
+  # explicitly (re-reads and returns the winner's row) rather than treating
+  # it as a failure, so the LOSER's own call already returns the winner's
+  # path — not just the next request.
   defp do_fetch_person_headshot(person_id) do
     with %Person{profile_path: profile_path} when is_binary(profile_path) <-
            Repo.get(Person, person_id),

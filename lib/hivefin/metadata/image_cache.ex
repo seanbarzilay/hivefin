@@ -54,17 +54,31 @@ defmodule Hivefin.Metadata.ImageCache do
   fetched lazily, on the first client request for it, never at metadata
   refresh time.
 
-  A failed fetch (TMDb 404, timeout, `:rate_limited`, …) persists an `Image`
-  row with `local_path: nil` as a "don't retry" marker: this endpoint is
+  A *confirmed permanent* failure — specifically TMDb returning 404, meaning
+  it genuinely has nothing at this path — persists an `Image` row with
+  `local_path: nil` as a "don't retry" marker: this endpoint is
   unauthenticated, so without it a permanently-missing photo would be
   re-attempted, and re-burn a shared `RateLimiter` token, on every view by
-  every anonymous caller, forever. `PeopleContext.update_profile_path/2`
-  deletes this marker (and any real cached file) the moment a legitimate
-  metadata refresh actually changes `profile_path` — that's what lets a
-  since-fixed or since-changed photo be fetched again.
+  every anonymous caller, forever. Every other failure (`:rate_limited`, a
+  5xx, a timeout, a DNS/TLS error, a disk error) is treated as transient and
+  marks nothing, so the next request simply retries.
+  `PeopleContext.update_profile_path/2` deletes an existing marker (and any
+  real cached file) the moment a legitimate metadata refresh actually
+  changes `profile_path` — that's what lets a since-fixed or since-changed
+  photo be fetched again.
+
+  Two concurrent calls for the same uncached person can both pass the
+  initial cache-miss check and both attempt to download; the loser's own
+  `Repo.insert` then hits `images_person_id_type_unique_index`. This is
+  handled explicitly, not as a failure: the winner's row is re-read and
+  returned as a cache hit. It must never be confused with a real failure —
+  marking it would overwrite the winner's just-committed row with
+  `local_path: nil` and (per `upsert/2`'s "remove the previous file if the
+  path changed" cleanup) delete the winner's just-downloaded file.
 
   Returns `{:ok, absolute_path}` or `{:error, reason}`. `{:error, :no_photo}`
-  specifically means "already tried, marked as failed, not retrying."
+  specifically means "already tried, marked as failed, not retrying" (or:
+  a concurrent caller already recorded that outcome for us).
   """
   @spec store_person(Ecto.UUID.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def store_person(person_id, url) when is_binary(person_id) and is_binary(url) do
@@ -84,9 +98,23 @@ defmodule Hivefin.Metadata.ImageCache do
              {:ok, _image} <- upsert_person_image(person_id, path) do
           {:ok, path}
         else
-          {:error, reason} ->
+          {:error, %Ecto.Changeset{}} ->
+            # Not a failure: a concurrent caller already recorded a row for
+            # this person (a success, or another confirmed-failure marker)
+            # between our cache-miss check and our own insert attempt — our
+            # own insert is what hit the unique index, not theirs. Re-read
+            # and use whatever they wrote; never touch their row.
+            resolve_concurrent_write(person_id)
+
+          {:error, {:http_error, 404}} = err ->
+            # Confirmed permanent: TMDb genuinely has nothing at this path.
             _ = mark_person_headshot_failed(person_id)
-            {:error, reason}
+            err
+
+          {:error, _reason} = err ->
+            # Transient (rate limit, 5xx, timeout, disk error, …): mark
+            # nothing, so the next request is a genuine retry.
+            err
         end
     end
   end
@@ -105,8 +133,28 @@ defmodule Hivefin.Metadata.ImageCache do
     end
   end
 
+  defp resolve_concurrent_write(person_id) do
+    case cached_person_path(person_id) do
+      {:ok, path} -> {:ok, path}
+      :failed -> {:error, :no_photo}
+      # The winning row we just lost an insert race against is gone again
+      # by the time we re-read (e.g. a metadata refresh invalidated it in
+      # the same instant) — genuinely transient, mark nothing, let the next
+      # request retry from a clean :miss.
+      :miss -> {:error, :race_lost}
+    end
+  end
+
+  # Always a bare INSERT, never a read-then-update: relies entirely on
+  # images_person_id_type_unique_index to make "am I the first to record
+  # anything for this person" atomic. upsert/2's read-then-write path is
+  # exactly what let this marker overwrite a concurrent winner's row (and
+  # delete their file) — this never reads an existing row, so it cannot.
   defp mark_person_headshot_failed(person_id) do
-    _ = upsert_person_image(person_id, nil)
+    %Image{}
+    |> Image.changeset(%{person_id: person_id, type: :primary, local_path: nil, provider: "tmdb"})
+    |> Repo.insert()
+
     :ok
   end
 

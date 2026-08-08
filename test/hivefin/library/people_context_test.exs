@@ -70,7 +70,18 @@ defmodule Hivefin.Library.PeopleContextTest do
     assert {:ok, 2} = PeopleContext.replace_for_item(a.id, people())
     assert {:ok, 2} = PeopleContext.replace_for_item(b.id, people())
 
-    assert Repo.aggregate(Person, :count) == 2
+    # Scoped to this test's own tmdb ids, not a bare table-wide count: other
+    # tests in this suite (e.g. the ImageCache concurrency-race test, which
+    # needs a genuinely separate, real Postgres connection and so can't use
+    # this test's own sandboxed-and-rolled-back transaction) may commit real
+    # Person rows outside this transaction, momentarily visible here too.
+    tmdb_ids = Enum.map(people(), &to_string(&1.tmdb_id))
+
+    assert Repo.aggregate(
+             from(p in Person, where: fragment("? ->> 'Tmdb'", p.provider_ids) in ^tmdb_ids),
+             :count
+           ) == 2
+
     assert length(PeopleContext.list_for_item(a.id)) == 2
     assert length(PeopleContext.list_for_item(b.id)) == 2
   end
@@ -172,6 +183,78 @@ defmodule Hivefin.Library.PeopleContextTest do
 
     glenn = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Glenn Close"))
     assert glenn.person.profile_path == "/new-photo.jpg"
+  end
+
+  test "profile_path updates run in ascending person id order (deadlock-avoidance sort)" do
+    # Doesn't (can't, without a genuine concurrent deadlock) prove the
+    # deadlock is avoided — it proves the sort that avoids it is actually
+    # applied, which is the cheap, reliable half of the guarantee and
+    # exactly what a future "this sort looks pointless" edit would delete.
+    item = make_item("Sorted Update Order")
+
+    seed = [
+      %{tmdb_id: 301, name: "A", role: "", type: "Actor", sort_order: 0, profile_path: "/a1.jpg"},
+      %{tmdb_id: 302, name: "B", role: "", type: "Actor", sort_order: 1, profile_path: "/b1.jpg"},
+      %{tmdb_id: 303, name: "C", role: "", type: "Actor", sort_order: 2, profile_path: "/c1.jpg"},
+      %{tmdb_id: 304, name: "D", role: "", type: "Actor", sort_order: 3, profile_path: "/d1.jpg"}
+    ]
+
+    assert {:ok, 4} = PeopleContext.replace_for_item(item.id, seed)
+
+    person_by_tmdb =
+      PeopleContext.list_for_item(item.id)
+      |> Map.new(&{&1.person.provider_ids["Tmdb"], &1.person})
+
+    ascending_ids =
+      person_by_tmdb |> Map.values() |> Enum.map(& &1.id) |> Enum.sort()
+
+    # Feed credits back in the REVERSE of ascending-id order, each with a
+    # genuinely different profile_path so update_profile_path/2 issues a
+    # real UPDATE for every one of them — a no-op (unchanged) profile_path
+    # wouldn't touch the row at all, so ordering couldn't be observed.
+    reversed_credits =
+      seed
+      |> Enum.sort_by(
+        fn %{tmdb_id: tmdb_id} -> Map.fetch!(person_by_tmdb, to_string(tmdb_id)).id end,
+        :desc
+      )
+      |> Enum.map(&%{&1 | profile_path: &1.profile_path <> "-v2"})
+
+    test_pid = self()
+    handler_id = "people-update-order-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:hivefin, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        # This file runs async: true — sibling tests' own `people` UPDATEs
+        # fire the same telemetry event concurrently. replace_for_item/2
+        # runs synchronously in the calling process (no Task spawn, unlike
+        # a preload), so self() here is reliably this test's own process.
+        if self() == test_pid and metadata.source == "people" and is_binary(metadata.query) and
+             String.starts_with?(metadata.query, "UPDATE") do
+          send(test_pid, {:people_update, List.last(metadata.params)})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, 4} = PeopleContext.replace_for_item(item.id, reversed_credits)
+
+    updated_ids =
+      Stream.repeatedly(fn ->
+        receive do
+          {:people_update, raw_id} -> Ecto.UUID.load!(raw_id)
+        after
+          50 -> nil
+        end
+      end)
+      |> Enum.take_while(& &1)
+
+    assert length(updated_ids) == 4
+    assert updated_ids == ascending_ids
   end
 
   test "two crew jobs collapsing to the same type and role insert without raising" do
