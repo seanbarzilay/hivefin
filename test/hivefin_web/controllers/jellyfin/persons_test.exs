@@ -1,7 +1,7 @@
 defmodule HivefinWeb.Jellyfin.PersonsTest do
   use HivefinWeb.ConnCase, async: true
 
-  alias Hivefin.Library.{Item, LibraryContext, PeopleContext}
+  alias Hivefin.Library.{Item, LibraryContext, PeopleContext, Person}
   alias Hivefin.Repo
 
   setup do
@@ -84,6 +84,8 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
 
     {:ok,
      conn: conn,
+     user: user,
+     library: library,
      item: item,
      tmdb_base: tmdb_base,
      actor_name: actor_name,
@@ -189,5 +191,105 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
 
   test "GET /Persons requires authentication" do
     assert json_response(get(build_conn(), "/Persons"), 401)
+  end
+
+  # The request jellyfin-web 10.10.7 ACTUALLY makes when a cast member is
+  # clicked. renderCast builds `#/details?id=<personId>` (appRouter's
+  # itemTypes list contains "Person"), and itemDetails' getPromise turns that
+  # into apiClient.getItem(userId, id) — GET /Users/{uid}/Items/{personId},
+  # no Fields param. /Persons/{name} is never called by this client.
+  describe "GET /Users/:user_id/Items/:person_id (the cast-click route)" do
+    test "returns a Person DTO with no Fields param", %{
+      conn: conn,
+      user: user,
+      actor_name: actor_name
+    } do
+      person_id = person_id_from_listing(conn, actor_name)
+
+      body = json_response(get(conn, "/Users/#{user.id}/Items/#{person_id}"), 200)
+
+      assert body["Type"] == "Person"
+      assert body["Name"] == actor_name
+      assert body["Id"] == person_id
+    end
+
+    test "carries MovieCount matching the number of films the person is credited in", %{
+      conn: conn,
+      user: user,
+      library: library,
+      tmdb_base: tmdb_base,
+      actor_name: actor_name
+    } do
+      # Same tmdb_id ⇒ same person row, now credited on a second film.
+      {:ok, second} =
+        %Item{}
+        |> Item.changeset(%{
+          name: "101 Dalmatians",
+          type: :movie,
+          sort_name: "101",
+          library_id: library.id
+        })
+        |> Repo.insert()
+
+      {:ok, _} =
+        PeopleContext.replace_for_item(second.id, [
+          %{
+            tmdb_id: tmdb_base,
+            name: actor_name,
+            role: "Lead",
+            type: "Actor",
+            sort_order: 0,
+            profile_path: nil
+          },
+          # Credited twice on the same film: two item_people rows, one movie.
+          %{
+            tmdb_id: tmdb_base,
+            name: actor_name,
+            role: "",
+            type: "Director",
+            sort_order: nil,
+            profile_path: nil
+          }
+        ])
+
+      person_id = person_id_from_listing(conn, actor_name)
+      body = json_response(get(conn, "/Users/#{user.id}/Items/#{person_id}"), 200)
+
+      assert body["MovieCount"] == 2
+      assert body["SeriesCount"] == 0
+      assert body["EpisodeCount"] == 0
+    end
+
+    test "a person credited in nothing emits a falsy count, not a truthy one", %{
+      conn: conn,
+      user: user
+    } do
+      # jellyfin-web guards with `if (item.MovieCount)`, so 0 is correct and
+      # falsy — the person page renders no "Movies" section, rather than an
+      # empty one. What must never happen is a truthy value here.
+      {:ok, uncredited} =
+        %Person{}
+        |> Person.changeset(%{name: "Uncredited #{System.unique_integer([:positive])}"})
+        |> Repo.insert()
+
+      body =
+        json_response(
+          get(conn, "/Users/#{user.id}/Items/#{Hivefin.Jellyfin.Id.format(uncredited.id)}"),
+          200
+        )
+
+      assert body["Type"] == "Person"
+      assert body["MovieCount"] == 0
+      assert body["SeriesCount"] == 0
+      assert body["EpisodeCount"] == 0
+    end
+  end
+
+  # Exactly how the client gets a person id: off a DTO, dashless, never
+  # constructed test-side.
+  defp person_id_from_listing(conn, name) do
+    body = json_response(get(conn, "/Persons?SearchTerm=#{URI.encode(name)}"), 200)
+
+    body["Items"] |> Enum.find(&(&1["Name"] == name)) |> Map.fetch!("Id")
   end
 end

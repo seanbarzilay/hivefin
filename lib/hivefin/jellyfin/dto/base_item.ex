@@ -115,8 +115,13 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   `PrimaryImageTag`/`ImageTags` are derived straight from `profile_path` via
   the same `image_tag/1` hash `person_entry/1` uses — never from a per-person
   `images` table query, and never a second hashing implementation.
+
+  ## Options
+  - `:counts` — `PeopleContext.credit_counts/1`'s map (`%{movie: 12}`), which
+    becomes `MovieCount`/`SeriesCount`/`EpisodeCount`. Omit it on list paths
+    (see `count_fields/1`).
   """
-  def from_person(%Person{} = person) do
+  def from_person(%Person{} = person, opts \\ []) do
     image_tags =
       case person.profile_path do
         path when is_binary(path) and path != "" -> %{"Primary" => image_tag(path)}
@@ -137,7 +142,38 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "PrimaryImageTag" => Map.get(image_tags, "Primary"),
       "UserData" => user_data(nil)
     }
+    |> Map.merge(count_fields(Keyword.get(opts, :counts)))
     |> drop_nils()
+  end
+
+  # jellyfin-web 10.10.7 builds the whole body of a person page out of these
+  # three fields and nothing else: setInitialCollapsibleState routes
+  # Type === "Person" to itemsByName.renderItems, which does
+  # `if (item.MovieCount) sections.push({name: "Movies", type: "Movie"})`
+  # (and the same for SeriesCount/EpisodeCount), then renders one section per
+  # entry. With no counts the section list is empty, so loadItems never runs
+  # — and loadItems' query builder is the ONLY place in the client that ever
+  # sets `PersonIds`. Miss these and both the person page and the /Items
+  # PersonIds filter are dead code. Upstream gets them for free because
+  # UserLibraryController.GetItem defaults DtoOptions to AllItemFields, which
+  # includes ItemCounts — the same reason ItemsController.show/2 force-appends
+  # "People".
+  #
+  # Zero is emitted as 0, not omitted: `if (0)` is falsy so the section is
+  # correctly skipped either way, and a present-but-zero count matches
+  # upstream's ItemCounts, which always emits the key.
+  #
+  # Absent `:counts` emits nothing at all — list paths (`/Persons`, up to 100
+  # DTOs a request) must not pay a grouped count per row, and no client reads
+  # counts off a person card.
+  defp count_fields(nil), do: %{}
+
+  defp count_fields(counts) when is_map(counts) do
+    %{
+      "MovieCount" => Map.get(counts, :movie, 0),
+      "SeriesCount" => Map.get(counts, :series, 0),
+      "EpisodeCount" => Map.get(counts, :episode, 0)
+    }
   end
 
   @doc """

@@ -4,7 +4,7 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
   alias Hivefin.Jellyfin.Dto.BaseItem
   alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
   alias Hivefin.Jellyfin.Params
-  alias Hivefin.Library.{Item, Library, LibraryContext, UserData}
+  alias Hivefin.Library.{Item, Library, LibraryContext, PeopleContext, Person, UserData}
 
   def views(conn, _params) do
     libraries = LibraryContext.list_libraries()
@@ -130,10 +130,36 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
             json(conn, BaseItem.from_library(library))
 
           nil ->
-            conn
-            |> put_status(:not_found)
-            |> json(%{"error" => "not_found"})
+            person_or_not_found(conn, item_id)
         end
+    end
+  end
+
+  # A cast/crew click lands HERE, not on GET /Persons/{name}. Traced through
+  # the bundled jellyfin-web 10.10.7 (Dockerfile pins jellyfin/jellyfin:10.10.7):
+  # renderCast links via appRouter.getRouteUrl({Type: "Person", Id: person.Id}),
+  # and "Person" is in that function's itemTypes list, so the href is
+  # `#/details?id=<personId>`. itemDetails' getPromise then does
+  # `if (params.id) return apiClient.getItem(userId, params.id)` — i.e.
+  # GET /Users/{userId}/Items/{personId}, with NO Fields param. Its by-name
+  # branches cover genre/musicgenre/musicartist only; apiClient.getPerson(name),
+  # the one function that would call /Persons/{name}, has zero call sites in the
+  # bundle. Without this branch every cast click 404s and the detail page spins
+  # forever — loading.hide() only runs at the end of reloadFromItem, which the
+  # rejected promise never reaches.
+  #
+  # Counts come along because the client's person page is built entirely from
+  # them — see count_fields/1 in Dto.BaseItem. Single person, so a single
+  # grouped count; never do this on a list path.
+  defp person_or_not_found(conn, id) do
+    case PeopleContext.get_person(id) do
+      %Person{} = person ->
+        json(conn, BaseItem.from_person(person, counts: PeopleContext.credit_counts(person.id)))
+
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{"error" => "not_found"})
     end
   end
 

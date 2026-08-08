@@ -39,8 +39,15 @@ defmodule HivefinWeb.Jellyfin.PersonsController do
   """
   def show(conn, %{"name" => name}) do
     case PeopleContext.get_person_by_name(name) do
-      nil -> conn |> put_status(:not_found) |> json(%{"error" => "not_found"})
-      person -> json(conn, BaseItem.from_person(person))
+      nil ->
+        conn |> put_status(:not_found) |> json(%{"error" => "not_found"})
+
+      person ->
+        # Single person, so the counts a person page is built from are one
+        # grouped query — the same payload ItemsController.show/2 returns for
+        # the route jellyfin-web actually uses. Deliberately NOT done in
+        # index/2, which builds up to 100 DTOs per request.
+        json(conn, BaseItem.from_person(person, counts: PeopleContext.credit_counts(person.id)))
     end
   end
 

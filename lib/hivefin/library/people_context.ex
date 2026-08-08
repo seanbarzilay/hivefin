@@ -7,8 +7,8 @@ defmodule Hivefin.Library.PeopleContext do
   """
   import Ecto.Query
 
-  alias Hivefin.Jellyfin.Params
-  alias Hivefin.Library.{Image, ItemPerson, Person}
+  alias Hivefin.Jellyfin.{Id, Params}
+  alias Hivefin.Library.{Image, Item, ItemPerson, Person}
   alias Hivefin.Repo
 
   # GET /Persons has no natural scope (no ParentId/library to narrow it, unlike
@@ -69,6 +69,45 @@ defmodule Hivefin.Library.PeopleContext do
       |> Repo.all()
 
     {page, total}
+  end
+
+  @doc """
+  Looks a person up by id, accepting the dashless form clients are handed.
+
+  Returns `nil` — never raises — for anything that isn't a well-formed id, so
+  a caller can use it as a "is this id a person?" fallback (see
+  `HivefinWeb.Jellyfin.ItemsController.show/2`) without first proving the id
+  is a UUID.
+  """
+  def get_person(id) do
+    case Id.normalize(id) do
+      {:ok, dashed} -> Repo.get(Person, dashed)
+      :error -> nil
+    end
+  end
+
+  @doc """
+  How many items of each type one person is credited in, keyed by
+  `Hivefin.Library.Item` type: `%{movie: 12, episode: 3}`. Types with no
+  credits are absent.
+
+  One grouped index scan on `item_people(person_id)` joined to `items` by
+  primary key — cheap per call, but strictly a **single-person** query. Never
+  call it while building a list page: `/Persons` renders up to 100 DTOs per
+  request, which would make this N grouped queries per page.
+  """
+  def credit_counts(person_id) when is_binary(person_id) do
+    from(ip in ItemPerson,
+      join: i in Item,
+      on: i.id == ip.item_id,
+      where: ip.person_id == ^person_id,
+      group_by: i.type,
+      # A person credited twice on one item (director AND writer) is two
+      # item_people rows but one film.
+      select: {i.type, count(ip.item_id, :distinct)}
+    )
+    |> Repo.all()
+    |> Map.new()
   end
 
   @doc """
