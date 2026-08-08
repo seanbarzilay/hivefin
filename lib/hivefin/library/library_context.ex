@@ -9,7 +9,17 @@ defmodule Hivefin.Library.LibraryContext do
 
   alias Hivefin.Jellyfin.Id
   alias Hivefin.Repo
-  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, PeopleContext, ScanJob}
+
+  alias Hivefin.Library.{
+    Item,
+    ItemPerson,
+    Library,
+    MediaSource,
+    MediaStream,
+    PeopleContext,
+    ScanJob
+  }
+
   alias Hivefin.MediaInfo.Prober
   alias Hivefin.Scanner.PathRules
 
@@ -153,6 +163,8 @@ defmodule Hivefin.Library.LibraryContext do
     When omitted and parent is a series or season, defaults to IndexNumber.
   - `:preload_media_sources` — preload sources + streams (default false)
   - `:preload_people` — preload cast/crew, ordered cast-before-crew (default false)
+  - `:person_ids` — list of client-supplied person ids (dashed or dashless);
+    only items featuring *any* of them are returned (OR, not AND)
 
   Returns `{entries, total_count}` where entries are `%Library{}` or `%Item{}`.
   """
@@ -165,9 +177,10 @@ defmodule Hivefin.Library.LibraryContext do
     sort_raw = Keyword.get(opts, :sort_by)
     preload_sources? = Keyword.get(opts, :preload_media_sources, false)
     preload_people? = Keyword.get(opts, :preload_people, false)
+    person_ids = Keyword.get(opts, :person_ids)
 
     cond do
-      is_nil(parent_id) and libraries_as_root?(include_types, recursive?) ->
+      is_nil(parent_id) and libraries_as_root?(include_types, recursive?, person_ids) ->
         sort_by = normalize_sort_by(sort_raw)
         libraries = list_libraries() |> sort_libraries(sort_by)
         total = length(libraries)
@@ -180,6 +193,7 @@ defmodule Hivefin.Library.LibraryContext do
           Item
           |> maybe_filter_types(include_types)
           |> apply_item_sort(sort_by)
+          |> filter_by_person_ids(person_ids)
 
         page_items(query, start_index, limit, preload_sources?, preload_people?)
 
@@ -192,6 +206,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> maybe_scope_parent(recursive?, nil)
           |> maybe_filter_types(include_types)
           |> apply_item_sort(sort_by)
+          |> filter_by_person_ids(person_ids)
 
         page_items(query, start_index, limit, preload_sources?, preload_people?)
 
@@ -204,6 +219,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> maybe_scope_parent(recursive?, item.id)
           |> maybe_filter_types(include_types)
           |> apply_item_sort(sort_by)
+          |> filter_by_person_ids(person_ids)
 
         page_items(query, start_index, limit, preload_sources?, preload_people?)
 
@@ -775,6 +791,41 @@ defmodule Hivefin.Library.LibraryContext do
 
   defp equal_mtime?(_, _), do: false
 
+  # Ids arrive dashless from clients (Id.format/1); Postgres stores dashed
+  # UUIDs, and Ecto.UUID.cast/1 rejects the dashless form outright, so every
+  # id is run through Id.normalize/1 (accepts either form) before it can
+  # reach the query. An id that fails to normalize (garbage, not a UUID at
+  # all) is dropped rather than passed through — passing it through as-is
+  # would hit `where person_id in ^ids` with a non-UUID string and blow up
+  # as an Ecto.Query.CastError (500) instead of the empty result an unknown
+  # id should produce. If every id is invalid, the "in" list is empty, which
+  # matches nothing rather than falling through to "no filter" (a filter
+  # that silently degrades to the whole library on bad input is worse than
+  # one that returns nothing).
+  #
+  # This is a plain `i.id in subquery(...)` rather than a join against
+  # item_people on the outer query: a person credited twice on the same item
+  # under two {type, role} rows (director + writer is common) would make a
+  # join fan out to two rows for that item, corrupting both the page and
+  # TotalRecordCount. The subquery only ever contributes membership, not
+  # rows, so the outer query's cardinality — and its ORDER BY/LIMIT/OFFSET —
+  # are completely unaffected by how many item_people rows a person has.
+  defp filter_by_person_ids(query, ids) when is_list(ids) and ids != [] do
+    valid_ids =
+      ids
+      |> Enum.map(&Id.normalize/1)
+      |> Enum.flat_map(fn
+        {:ok, dashed} -> [dashed]
+        :error -> []
+      end)
+
+    person_items = from(ip in ItemPerson, where: ip.person_id in ^valid_ids, select: ip.item_id)
+
+    where(query, [i], i.id in subquery(person_items))
+  end
+
+  defp filter_by_person_ids(query, _ids), do: query
+
   defp maybe_filter_type(query, nil), do: query
   defp maybe_filter_type(query, type), do: where(query, [i], i.type == ^type)
 
@@ -873,10 +924,17 @@ defmodule Hivefin.Library.LibraryContext do
 
   # Root with no concrete type filter → libraries as CollectionFolders.
   # When client asks for Movie/Series/etc (esp. recursive), query items instead.
-  defp libraries_as_root?(nil, _recursive?), do: true
-  defp libraries_as_root?([], _recursive?), do: true
-  defp libraries_as_root?(_types, true), do: false
-  defp libraries_as_root?(_types, false), do: false
+  # PersonIds is the same kind of signal even with no IncludeItemTypes: a
+  # person page wants *items*, never folders, so its presence alone also
+  # rules out the libraries-as-root branch (see filter_by_person_ids/2).
+  defp libraries_as_root?(nil, _recursive?, person_ids), do: no_person_filter?(person_ids)
+  defp libraries_as_root?([], _recursive?, person_ids), do: no_person_filter?(person_ids)
+  defp libraries_as_root?(_types, true, _person_ids), do: false
+  defp libraries_as_root?(_types, false, _person_ids), do: false
+
+  defp no_person_filter?(nil), do: true
+  defp no_person_filter?([]), do: true
+  defp no_person_filter?(_), do: false
 
   defp maybe_scope_parent(query, true, _parent_id), do: query
 

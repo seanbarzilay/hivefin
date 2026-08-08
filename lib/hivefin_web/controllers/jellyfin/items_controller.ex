@@ -292,7 +292,8 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
       sort_by: params["SortBy"] || params["sortBy"],
       fields: fields,
       preload_media_sources: "MediaSources" in fields,
-      preload_people: "People" in fields
+      preload_people: "People" in fields,
+      person_ids: parse_ids(params["PersonIds"] || params["personIds"])
     ]
   end
 
