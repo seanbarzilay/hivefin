@@ -201,5 +201,167 @@ defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
     conn = get(conn, ~p"/Items/#{entry.person.id}/Images/Primary")
 
     assert conn.status == 404
+    # Unlike a confirmed TMDb failure, this is not persisted anywhere — the
+    # unauthenticated caller can't force a durable negative-cache write, so
+    # this must NOT carry the long-lived cache-control a confirmed failure
+    # gets (Phoenix's own default JSON cache-control is fine here).
+    refute get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
+  end
+
+  test "GET Primary for a confirmed-failed headshot 404s with cache-control and is never retried",
+       %{conn: conn} do
+    lib_path = Path.join(System.tmp_dir!(), "img-ctrl-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(lib_path)
+    on_exit(fn -> File.rm_rf(lib_path) end)
+
+    {:ok, library} =
+      LibraryContext.create_library(%{name: "Gone", type: :movies, path: lib_path})
+
+    {:ok, movie, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{name: "Gone Photo", production_year: 2020})
+
+    assert {:ok, 1} =
+             PeopleContext.replace_for_item(movie.id, [
+               %{
+                 tmdb_id: 44,
+                 name: "Removed Photo Person",
+                 role: "",
+                 type: "Actor",
+                 sort_order: 0,
+                 profile_path: "/removed.jpg"
+               }
+             ])
+
+    [entry] = PeopleContext.list_for_item(movie.id)
+
+    Req.Test.stub(TMDB, fn tmdb_conn ->
+      tmdb_conn |> Plug.Conn.put_status(404) |> Plug.Conn.send_resp(404, "")
+    end)
+
+    conn = get(conn, ~p"/Items/#{entry.person.id}/Images/Primary")
+    assert conn.status == 404
+    assert get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
+
+    # No second Req.Test.stub is configured: any second HTTP attempt raises,
+    # proving the unauthenticated route can't re-burn the shared TMDb budget
+    # on every subsequent view of the same movie.
+    conn2 = get(build_conn(), "/Items/#{entry.person.id}/Images/Primary")
+    assert conn2.status == 404
+    assert get_resp_header(conn2, "cache-control") == ["public, max-age=3600"]
+  end
+
+  test "the concurrency cap 404s immediately instead of queueing on the rate limiter", %{
+    conn: conn
+  } do
+    lib_path = Path.join(System.tmp_dir!(), "img-ctrl-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(lib_path)
+    on_exit(fn -> File.rm_rf(lib_path) end)
+
+    {:ok, library} =
+      LibraryContext.create_library(%{name: "Capped", type: :movies, path: lib_path})
+
+    {:ok, movie, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{
+        name: "Capped Photo",
+        production_year: 2020
+      })
+
+    assert {:ok, 1} =
+             PeopleContext.replace_for_item(movie.id, [
+               %{
+                 tmdb_id: 45,
+                 name: "Queued Out Person",
+                 role: "",
+                 type: "Actor",
+                 sort_order: 0,
+                 profile_path: "/queued.jpg"
+               }
+             ])
+
+    [entry] = PeopleContext.list_for_item(movie.id)
+
+    # Saturate the exact gate ImagesController checks out of, without going
+    # through 10 real requests.
+    gate_key = {HivefinWeb.Jellyfin.ImagesController, :headshot_fetch_gate}
+    ref = :counters.new(1, [])
+    :counters.add(ref, 1, 10)
+    :persistent_term.put(gate_key, ref)
+    on_exit(fn -> :persistent_term.erase(gate_key) end)
+
+    # No Req.Test.stub configured: if the cap failed to short-circuit before
+    # any TMDb call, this would raise instead of silently 404ing.
+    {elapsed_us, conn} =
+      :timer.tc(fn -> get(conn, ~p"/Items/#{entry.person.id}/Images/Primary") end)
+
+    assert conn.status == 404
+    # Nowhere near RateLimiter.checkout/1's 120s call timeout — this must
+    # fail fast, not queue.
+    assert elapsed_us < 1_000_000
+  end
+
+  test "a changed profile_path is a genuine cache miss and fetches the new photo", %{conn: conn} do
+    lib_path = Path.join(System.tmp_dir!(), "img-ctrl-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(lib_path)
+    on_exit(fn -> File.rm_rf(lib_path) end)
+
+    {:ok, library} =
+      LibraryContext.create_library(%{name: "Changed", type: :movies, path: lib_path})
+
+    {:ok, movie, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{
+        name: "Changed Photo",
+        production_year: 2020
+      })
+
+    assert {:ok, 1} =
+             PeopleContext.replace_for_item(movie.id, [
+               %{
+                 tmdb_id: 46,
+                 name: "Recast Photo Person",
+                 role: "",
+                 type: "Actor",
+                 sort_order: 0,
+                 profile_path: "/old.jpg"
+               }
+             ])
+
+    [entry] = PeopleContext.list_for_item(movie.id)
+
+    Req.Test.stub(TMDB, fn tmdb_conn ->
+      assert tmdb_conn.request_path =~ "/old.jpg"
+
+      tmdb_conn
+      |> Plug.Conn.put_resp_content_type("image/jpeg")
+      |> Plug.Conn.send_resp(200, "old-photo-bytes")
+    end)
+
+    conn = get(conn, ~p"/Items/#{entry.person.id}/Images/Primary")
+    assert conn.status == 200
+    assert conn.resp_body == "old-photo-bytes"
+
+    # A legitimate metadata refresh changes the photo TMDb has for them.
+    assert {:ok, 1} =
+             PeopleContext.replace_for_item(movie.id, [
+               %{
+                 tmdb_id: 46,
+                 name: "Recast Photo Person",
+                 role: "",
+                 type: "Actor",
+                 sort_order: 0,
+                 profile_path: "/new.jpg"
+               }
+             ])
+
+    Req.Test.stub(TMDB, fn tmdb_conn ->
+      assert tmdb_conn.request_path =~ "/new.jpg"
+
+      tmdb_conn
+      |> Plug.Conn.put_resp_content_type("image/jpeg")
+      |> Plug.Conn.send_resp(200, "new-photo-bytes")
+    end)
+
+    conn2 = get(build_conn(), "/Items/#{entry.person.id}/Images/Primary")
+    assert conn2.status == 200
+    assert conn2.resp_body == "new-photo-bytes"
   end
 end
