@@ -100,7 +100,20 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
   def show(conn, %{"item_id" => item_id} = params) do
     # Always preload sources for detail/playback readiness
-    fields = parse_fields(params["Fields"] || params["fields"])
+    #
+    # jellyfin-web 10.10.7 (the exact build this project bundles, see
+    # Dockerfile) fetches the detail item via getItem(userId, itemId) — two
+    # arguments, no Fields option at all. Upstream Jellyfin gets away with
+    # that because UserLibraryController.GetItem builds a DtoOptions that
+    # defaults Fields to AllItemFields: the detail route ignores the Fields
+    # query param entirely and always returns everything, including People.
+    # Force-appending "People" here matches that upstream behavior for THIS
+    # route only. Do not "clean up" this inconsistency with
+    # maybe_put_people/3's Fields gate in base_item.ex — that gate exists
+    # specifically to keep a full cast list off every item in a 7k+ movie
+    # listing page, and index/2, seasons/2, episodes/2, latest/2, and
+    # resume/2 must keep relying on it.
+    fields = Enum.uniq(["People" | parse_fields(params["Fields"] || params["fields"])])
 
     item = LibraryContext.get_item_with_sources(item_id)
 

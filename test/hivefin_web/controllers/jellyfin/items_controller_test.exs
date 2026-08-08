@@ -155,6 +155,85 @@ defmodule HivefinWeb.Jellyfin.ItemsControllerTest do
     assert json_response(conn, 404)
   end
 
+  # Regression coverage for the bug that shipped nine commits deep: every
+  # other People test in this codebase asserts at the DTO level with
+  # fields: ["People"] passed explicitly, which can't catch a controller
+  # that never adds "People" to fields in the first place. jellyfin-web
+  # 10.10.7 calls getItem(userId, itemId) with NO Fields param at all — a
+  # test that passes ?Fields=People proves nothing here.
+  test "GET /Users/:user_id/Items/:item_id includes populated People with no Fields param", %{
+    conn: conn,
+    user: user,
+    movie: movie
+  } do
+    {:ok, _} =
+      Hivefin.Library.PeopleContext.replace_for_item(movie.id, [
+        %{
+          tmdb_id: 3084,
+          name: "Glenn Close",
+          role: "Cruella De Vil",
+          type: "Actor",
+          sort_order: 0,
+          profile_path: nil
+        }
+      ])
+
+    conn = get(conn, ~p"/Users/#{user.id}/Items/#{movie.id}")
+
+    assert %{"People" => people} = json_response(conn, 200)
+    assert [%{"Name" => "Glenn Close", "Type" => "Actor"}] = people
+  end
+
+  test "GET /Items/:item_id (no user prefix) includes populated People with no Fields param", %{
+    conn: conn,
+    movie: movie
+  } do
+    {:ok, _} =
+      Hivefin.Library.PeopleContext.replace_for_item(movie.id, [
+        %{
+          tmdb_id: 1,
+          name: "Kevin Lima",
+          role: "",
+          type: "Director",
+          sort_order: nil,
+          profile_path: nil
+        }
+      ])
+
+    conn = get(conn, ~p"/Items/#{movie.id}")
+
+    assert %{"People" => people} = json_response(conn, 200)
+    assert [%{"Name" => "Kevin Lima", "Type" => "Director"}] = people
+  end
+
+  test "GET /Users/:user_id/Items (listing) with no Fields param still omits People", %{
+    conn: conn,
+    user: user,
+    library: library,
+    movie: movie
+  } do
+    {:ok, _} =
+      Hivefin.Library.PeopleContext.replace_for_item(movie.id, [
+        %{
+          tmdb_id: 3084,
+          name: "Glenn Close",
+          role: "Cruella De Vil",
+          type: "Actor",
+          sort_order: 0,
+          profile_path: nil
+        }
+      ])
+
+    conn =
+      get(conn, ~p"/Users/#{user.id}/Items", %{
+        "ParentId" => library.id,
+        "IncludeItemTypes" => "Movie"
+      })
+
+    assert %{"Items" => [item]} = json_response(conn, 200)
+    refute Map.has_key?(item, "People")
+  end
+
   test "GET /Users/:user_id/Items supports Limit and StartIndex", %{
     conn: conn,
     user: user,
