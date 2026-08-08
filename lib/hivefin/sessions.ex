@@ -106,7 +106,8 @@ defmodule Hivefin.Sessions do
 
   @doc """
   Access tokens for `user_id` that currently hold a live socket, each paired
-  with its play state (`t:Dto.Session.from_access_token/2`'s `:state` opt).
+  with its play state and last-activity timestamp
+  (`t:Dto.Session.from_access_token/2`'s `:state` and `:last_activity` opts).
 
   Single source of truth for "what is a session" — both `GET /Sessions` and
   the Sessions websocket push build their payload from this, so they can't
@@ -131,7 +132,10 @@ defmodule Hivefin.Sessions do
     [user_id: user_id, device_id: device_id]
     |> Accounts.list_access_tokens()
     |> Enum.filter(&Map.has_key?(live_by_session_id, &1.id))
-    |> Enum.map(&{&1, play_state(live_by_session_id[&1.id])})
+    |> Enum.map(fn at ->
+      entry = live_by_session_id[at.id]
+      {at, play_state(entry), Map.get(entry, :last_activity)}
+    end)
   end
 
   defp play_state(entry) do

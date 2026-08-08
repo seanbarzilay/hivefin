@@ -315,6 +315,42 @@ defmodule HivefinWeb.JellyfinSocketTest do
       Process.exit(dup, :kill)
     end
 
+    # The dashboard filters sessions on LastActivityDate age; KeepAlive is the
+    # heartbeat jellyfin-web actually sends on the ForceKeepAlive interval, so
+    # it must refresh the registry timestamp SessionInfoDto reports from.
+    test "KeepAlive refreshes the registry's last_activity timestamp" do
+      s = state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      [entry] = Hivefin.Sessions.attrs(s.session_id)
+      before = entry.last_activity
+      Process.sleep(5)
+
+      assert {:push, {:text, _json}, ^s} =
+               JellyfinSocket.handle_in(frame(%{"MessageType" => "KeepAlive"}), s)
+
+      [entry2] = Hivefin.Sessions.attrs(s.session_id)
+      assert DateTime.compare(entry2.last_activity, before) == :gt
+    end
+
+    # Playback progress is real activity too — a client that's actively
+    # streaming but not yet due for its next KeepAlive must still look fresh.
+    test "a jellyfin_session_state message refreshes the registry's last_activity timestamp" do
+      s = state()
+      {:push, _, s} = JellyfinSocket.init(s)
+
+      [entry] = Hivefin.Sessions.attrs(s.session_id)
+      before = entry.last_activity
+      Process.sleep(5)
+
+      assert {:ok, ^s} =
+               JellyfinSocket.handle_info({:jellyfin_session_state, %{position_ticks: 1}}, s)
+
+      [entry2] = Hivefin.Sessions.attrs(s.session_id)
+      assert DateTime.compare(entry2.last_activity, before) == :gt
+      assert entry2.position_ticks == 1
+    end
+
     test "a session_state message updates the registry entry" do
       s = state()
       {:push, _, s} = JellyfinSocket.init(s)

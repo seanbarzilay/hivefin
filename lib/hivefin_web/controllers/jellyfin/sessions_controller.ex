@@ -31,7 +31,7 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
     sessions =
       user.id
       |> Sessions.live_for_user(device_id: device_id)
-      |> Enum.map(fn {at, play_state} ->
+      |> Enum.map(fn {at, play_state, last_activity} ->
         # controllable: true is unconditional, not per-entry, because
         # live_for_user/2 only ever returns access tokens with a live socket
         # — every entry here is controllable by definition, same condition
@@ -39,7 +39,11 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
         # live_for_user/2 is ever widened to include sessions without a live
         # socket, this becomes wrong silently; re-derive controllable per-entry
         # then.
-        SessionDto.from_access_token(at, state: play_state, controllable: true)
+        SessionDto.from_access_token(at,
+          state: play_state,
+          controllable: true,
+          last_activity: last_activity
+        )
       end)
 
     json(conn, sessions)

@@ -62,10 +62,22 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   and `Capabilities.SupportsMediaControl` report `true` — this session is
   addressable, it has an open socket. `SupportedCommands` lists
   `supported_commands/0`.
+
+  `opts[:last_activity]` (a `DateTime` or `nil`) is real per-session activity
+  (registered/heartbeat/playback — see `Hivefin.Sessions`), and takes
+  precedence over the access token's `updated_at`/`inserted_at` for both
+  `LastActivityDate` and `LastPlaybackCheckIn`. The token is only set at
+  login and never changes, so without this a live, actively-streaming
+  session can report activity from whenever it first signed in. Falls back
+  to the token-derived value (never null) when absent.
   """
   def from_access_token(%AccessToken{} = at, opts \\ []) do
     user = at.user
-    last_activity = datetime(at.updated_at || at.inserted_at) || now()
+
+    last_activity =
+      datetime(Keyword.get(opts, :last_activity)) ||
+        datetime(at.updated_at || at.inserted_at) || now()
+
     state = Keyword.get(opts, :state)
     controllable? = Keyword.get(opts, :controllable, false)
     commands = if controllable?, do: supported_commands(), else: []

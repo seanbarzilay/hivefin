@@ -74,6 +74,46 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert Enum.sort(SessionDto.required_keys()) == Enum.sort(@required)
   end
 
+  # The actual production bug: LastActivityDate was derived solely from the
+  # access token's updated_at/inserted_at, which is set once at login and
+  # never changes — so a session streaming right now reports activity from
+  # whenever the device first signed in. A real per-session heartbeat (the
+  # registry's last_activity) must win over that stale token timestamp.
+  test ":last_activity opt overrides the token's own stale updated_at/inserted_at", %{
+    access_token: at
+  } do
+    stale = DateTime.utc_now() |> DateTime.add(-86_400, :second) |> DateTime.truncate(:second)
+
+    Hivefin.Repo.update_all(
+      from(t in Hivefin.Accounts.AccessToken, where: t.id == ^at.id),
+      set: [updated_at: stale, inserted_at: stale]
+    )
+
+    stale_at =
+      Hivefin.Accounts.AccessToken
+      |> Hivefin.Repo.get!(at.id)
+      |> Hivefin.Repo.preload(:user)
+
+    fresh = DateTime.utc_now()
+    dto = SessionDto.from_access_token(stale_at, last_activity: fresh)
+
+    assert dto["LastActivityDate"] == DateTime.to_iso8601(fresh)
+    assert dto["LastPlaybackCheckIn"] == DateTime.to_iso8601(fresh)
+    refute dto["LastActivityDate"] == DateTime.to_iso8601(stale)
+  end
+
+  # No registry entry (e.g. socket not yet registered, or the entry predates
+  # this field) must not surface a null LastActivityDate — kotlinx
+  # serialization requires the key, and jellyfin-web parses it unconditionally.
+  test "falls back to the token-derived timestamp when :last_activity is absent", %{
+    access_token: at
+  } do
+    dto = SessionDto.from_access_token(at, last_activity: nil)
+
+    refute is_nil(dto["LastActivityDate"])
+    assert {:ok, _, _} = DateTime.from_iso8601(dto["LastActivityDate"])
+  end
+
   test "LastPlaybackCheckIn is an ISO8601 timestamp", %{access_token: at} do
     dto = SessionDto.from_access_token(at)
 

@@ -29,7 +29,8 @@ defmodule HivefinWeb.JellyfinSocket do
     :ok =
       Sessions.register(state.session_id, %{
         user_id: state.user_id,
-        device_id: state.device_id
+        device_id: state.device_id,
+        last_activity: DateTime.utc_now()
       })
 
     :ok = Sessions.subscribe()
@@ -71,8 +72,11 @@ defmodule HivefinWeb.JellyfinSocket do
   end
 
   def handle_info({:jellyfin_session_state, attrs}, state) do
-    # Registry entries are caller-owned, so the socket applies its own update.
-    Sessions.update(state.session_id, attrs)
+    # Registry entries are caller-owned, so the socket applies its own
+    # update. Playback progress is real activity, so it refreshes
+    # last_activity in the same merge — one unregister+register cycle
+    # instead of two.
+    Sessions.update(state.session_id, Map.put(attrs, :last_activity, DateTime.utc_now()))
     Sessions.broadcast_changed()
     {:ok, state}
   end
@@ -87,7 +91,13 @@ defmodule HivefinWeb.JellyfinSocket do
     :ok
   end
 
-  defp dispatch("KeepAlive", state), do: {:push, {:text, WsMessage.keep_alive()}, state}
+  defp dispatch("KeepAlive", state) do
+    # jellyfin-web sends this on the ForceKeepAlive interval we advertised at
+    # connect (@keep_alive_seconds) — the natural per-session heartbeat, well
+    # inside the dashboard's 15-minute staleness window.
+    Sessions.update(state.session_id, %{last_activity: DateTime.utc_now()})
+    {:push, {:text, WsMessage.keep_alive()}, state}
+  end
 
   defp dispatch(type, state) when type in @noop_types, do: {:ok, state}
 
@@ -109,13 +119,17 @@ defmodule HivefinWeb.JellyfinSocket do
     sessions =
       state.user_id
       |> Sessions.live_for_user()
-      |> Enum.map(fn {at, play_state} ->
+      |> Enum.map(fn {at, play_state, last_activity} ->
         # controllable: true is unconditional, not per-entry, because
         # live_for_user/2 only ever returns access tokens with a live socket
         # — every entry here is controllable by definition. If live_for_user/2
         # is ever widened to include sessions without a live socket, this
         # becomes wrong silently; re-derive controllable per-entry then.
-        SessionDto.from_access_token(at, state: play_state, controllable: true)
+        SessionDto.from_access_token(at,
+          state: play_state,
+          controllable: true,
+          last_activity: last_activity
+        )
       end)
 
     WsMessage.encode("Sessions", sessions)
