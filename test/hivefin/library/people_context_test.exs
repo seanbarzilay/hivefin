@@ -1,7 +1,9 @@
 defmodule Hivefin.Library.PeopleContextTest do
   use Hivefin.DataCase, async: true
 
-  alias Hivefin.Library.{Item, LibraryContext, PeopleContext, Person}
+  import Ecto.Query
+
+  alias Hivefin.Library.{Item, ItemPerson, LibraryContext, PeopleContext, Person}
   alias Hivefin.Repo
 
   defp make_item(name) do
@@ -92,12 +94,13 @@ defmodule Hivefin.Library.PeopleContextTest do
     assert names == ["Glenn Close"]
   end
 
-  test "an empty credits list clears the item's people" do
+  test "replace_for_item with an empty list leaves existing rows intact" do
     item = make_item("102 Dalmatians")
     assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
+
     assert {:ok, 0} = PeopleContext.replace_for_item(item.id, [])
 
-    assert PeopleContext.list_for_item(item.id) == []
+    assert length(PeopleContext.list_for_item(item.id)) == 2
   end
 
   test "cast sorts before crew" do
@@ -106,5 +109,55 @@ defmodule Hivefin.Library.PeopleContextTest do
     assert {:ok, 2} = PeopleContext.replace_for_item(item.id, Enum.reverse(people()))
 
     assert Enum.map(PeopleContext.list_for_item(item.id), & &1.type) == ["Actor", "Director"]
+  end
+
+  test "crew role persists as an empty string, never SQL NULL" do
+    item = make_item("102 Dalmatians")
+    assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
+
+    crew = Enum.find(PeopleContext.list_for_item(item.id), &(&1.type == "Director"))
+    assert crew.role == ""
+
+    # Read the persisted column directly — bypass any struct default that
+    # could paper over a silently-nilified value.
+    db_role =
+      Repo.one!(
+        from(ip in ItemPerson,
+          where: ip.item_id == ^item.id and ip.type == "Director",
+          select: ip.role
+        )
+      )
+
+    assert db_role == ""
+    refute is_nil(db_role)
+  end
+
+  test "two crew jobs collapsing to the same type and role insert without raising" do
+    item = make_item("102 Dalmatians")
+
+    # e.g. one writer credited for both "Story" and "Screenplay": TMDB maps
+    # both jobs to type: "Writer", role: "" — same person, same type, same
+    # role, from two distinct source rows.
+    credits = [
+      %{
+        tmdb_id: 42,
+        name: "Story Writer",
+        role: "",
+        type: "Writer",
+        sort_order: nil,
+        profile_path: nil
+      },
+      %{
+        tmdb_id: 42,
+        name: "Story Writer",
+        role: "",
+        type: "Writer",
+        sort_order: nil,
+        profile_path: nil
+      }
+    ]
+
+    assert {:ok, 1} = PeopleContext.replace_for_item(item.id, credits)
+    assert length(PeopleContext.list_for_item(item.id)) == 1
   end
 end

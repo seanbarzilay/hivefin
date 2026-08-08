@@ -22,7 +22,11 @@ defmodule Hivefin.Library.ItemPerson do
 
   def changeset(item_person, attrs) do
     item_person
-    |> cast(attrs, [:item_id, :person_id, :role, :type, :sort_order])
+    # cast/4 defaults :empty_values to [""], which silently rewrites our
+    # crew role: "" back to nil before it becomes a change — the exact
+    # null-Role bug this project has shipped three times already. Disabling
+    # it is what makes "" actually persist.
+    |> cast(attrs, [:item_id, :person_id, :role, :type, :sort_order], empty_values: [])
     |> validate_required([:type])
     |> unique_constraint([:item_id, :person_id, :type, :role], name: :item_people_unique_index)
   end

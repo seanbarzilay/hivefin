@@ -149,13 +149,9 @@ defmodule Hivefin.Metadata.Worker do
 
     # People are stored separately from the item's own columns; a credits
     # failure must not roll back the item metadata we just wrote.
-    case match[:people] do
-      people when is_list(people) and people != [] ->
-        _ = Hivefin.Library.PeopleContext.replace_for_item(item.id, people)
-
-      _ ->
-        :ok
-    end
+    # PeopleContext.replace_for_item/2 treats [] as a no-op, so a missing or
+    # empty :people key here can't wipe credits an item already has.
+    _ = Hivefin.Library.PeopleContext.replace_for_item(item.id, match[:people] || [])
 
     result
   end

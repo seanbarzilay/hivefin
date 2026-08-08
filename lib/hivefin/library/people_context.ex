@@ -12,28 +12,46 @@ defmodule Hivefin.Library.PeopleContext do
 
   @doc """
   Replaces an item's cast and crew. Returns `{:ok, links_written}`.
+
+  `people: []` is a no-op that leaves existing rows untouched — a match map
+  with no credits (e.g. a pre-credits cache entry) must never wipe good
+  credits an item already has. Only a non-empty list triggers the
+  delete-then-insert replace.
   """
+  def replace_for_item(item_id, []) when is_binary(item_id) do
+    {:ok, 0}
+  end
+
   def replace_for_item(item_id, people) when is_binary(item_id) and is_list(people) do
     Repo.transaction(fn ->
       Repo.delete_all(from(ip in ItemPerson, where: ip.item_id == ^item_id))
 
-      people
-      |> Enum.reduce(0, fn attrs, count ->
-        person = upsert_person(attrs)
+      rows =
+        people
+        |> Enum.map(&{upsert_person(&1), &1})
+        # Two crew jobs can map to the same {type, role} (Story + Screenplay
+        # both become type: "Writer", role: ""). item_people_unique_index is
+        # keyed on [:item_id, :person_id, :type, :role], so without this the
+        # second insert is a genuine duplicate-key error, not a race.
+        |> Enum.uniq_by(fn {person, attrs} -> {person.id, attrs[:type], attrs[:role] || ""} end)
 
-        {:ok, _} =
-          %ItemPerson{}
-          |> ItemPerson.changeset(%{
+      Enum.each(rows, fn {person, attrs} ->
+        changeset =
+          ItemPerson.changeset(%ItemPerson{}, %{
             item_id: item_id,
             person_id: person.id,
             role: attrs[:role] || "",
             type: attrs[:type],
             sort_order: attrs[:sort_order]
           })
-          |> Repo.insert()
 
-        count + 1
+        case Repo.insert(changeset) do
+          {:ok, _} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
       end)
+
+      length(rows)
     end)
   end
 
@@ -61,14 +79,22 @@ defmodule Hivefin.Library.PeopleContext do
   defp upsert_person(%{tmdb_id: tmdb_id} = attrs) when not is_nil(tmdb_id) do
     key = to_string(tmdb_id)
 
-    case Repo.one(from(p in Person, where: fragment("? ->> 'Tmdb' = ?", p.provider_ids, ^key))) do
+    case Repo.one(person_by_tmdb_id(key)) do
       nil ->
-        {:ok, person} =
-          %Person{}
-          |> Person.changeset(%{name: attrs[:name], provider_ids: %{"Tmdb" => key}})
-          |> Repo.insert()
+        %Person{}
+        |> Person.changeset(%{name: attrs[:name], provider_ids: %{"Tmdb" => key}})
+        |> Repo.insert()
+        |> case do
+          {:ok, person} ->
+            person
 
-        person
+          {:error, _changeset} ->
+            # Metadata.Queue runs max_concurrency: 2: another item's refresh
+            # inserted this same TMDb id between our SELECT and INSERT.
+            # Postgres blocked our insert until theirs committed, so their
+            # row is visible now — use it instead of crashing.
+            Repo.one!(person_by_tmdb_id(key))
+        end
 
       person ->
         person
@@ -78,5 +104,9 @@ defmodule Hivefin.Library.PeopleContext do
   defp upsert_person(attrs) do
     {:ok, person} = %Person{} |> Person.changeset(%{name: attrs[:name]}) |> Repo.insert()
     person
+  end
+
+  defp person_by_tmdb_id(key) do
+    from(p in Person, where: fragment("? ->> 'Tmdb' = ?", p.provider_ids, ^key))
   end
 end
