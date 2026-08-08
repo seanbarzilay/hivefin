@@ -5,7 +5,15 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
 
   alias Hivefin.Jellyfin.Dto.BaseItem
   alias Hivefin.Jellyfin.Dto.SdkRequired
-  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream}
+  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, Person}
+
+  # Listed literally, not read from the implementation — a test that derives
+  # its expectations from the code under test agrees with a regression
+  # instead of catching one. `Id`/`Type` are the two jellyfin-sdk-kotlin has
+  # no default for; the rest are SDK-optional but emitted anyway because
+  # jellyfin-web's generic card/list rendering dereferences them without a
+  # null guard regardless of item Type (see from_person/1's moduledoc).
+  @person_dto_keys ~w(Id Name ServerId Type IsFolder PlayAccess LocationType SortName ProviderIds ImageTags UserData)
 
   test "maps movie item" do
     id = Ecto.UUID.generate()
@@ -281,6 +289,77 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     dto = BaseItem.from_item(item, fields: ["MediaSources"])
     assert [source] = dto["MediaSources"]
     assert source["SupportsDirectPlay"] == false
+  end
+
+  test "person DTO carries every field jellyfin-web dereferences unconditionally" do
+    person = %Person{
+      id: Ecto.UUID.generate(),
+      name: "Glenn Close",
+      sort_name: "glenn close",
+      provider_ids: %{"Tmdb" => "3084"},
+      profile_path: nil
+    }
+
+    dto = BaseItem.from_person(person)
+
+    assert dto["Type"] == "Person"
+    assert dto["Name"] == "Glenn Close"
+    assert dto["Id"] == Id.format(person.id)
+    assert dto["IsFolder"] == false
+    assert dto["SortName"] == "glenn close"
+    assert dto["ProviderIds"] == %{"Tmdb" => "3084"}
+    assert dto["ImageTags"] == %{}
+
+    for key <- @person_dto_keys do
+      assert Map.has_key?(dto, key), "Person BaseItemDto missing #{key}"
+      refute is_nil(dto[key]), "Person BaseItemDto required key #{key} is null"
+    end
+  end
+
+  test "person DTO has no profile_path: PrimaryImageTag is absent, not null" do
+    person = %Person{
+      id: Ecto.UUID.generate(),
+      name: "No Photo",
+      sort_name: "no photo",
+      provider_ids: %{},
+      profile_path: nil
+    }
+
+    dto = BaseItem.from_person(person)
+
+    refute Map.has_key?(dto, "PrimaryImageTag")
+    assert dto["ImageTags"] == %{}
+  end
+
+  test "person DTO PrimaryImageTag is the same hash person_entry/1 emits for the same profile_path" do
+    path = "/abc123.jpg"
+
+    person = %Person{
+      id: Ecto.UUID.generate(),
+      name: "Headshot Haver",
+      sort_name: "headshot haver",
+      provider_ids: %{},
+      profile_path: path
+    }
+
+    # Same person, rendered through from_item's People field (person_entry/1)
+    # — must produce the identical tag, proving there is exactly one hashing
+    # implementation, not two that could drift apart.
+    item = %Item{
+      id: Ecto.UUID.generate(),
+      name: "M",
+      type: :movie,
+      sort_name: "m",
+      item_people: [%{person: person, role: "", type: "Actor", sort_order: 0}]
+    }
+
+    [people_entry] = BaseItem.from_item(item, fields: ["People"])["People"]
+    person_dto = BaseItem.from_person(person)
+
+    expected = :crypto.hash(:md5, path) |> Base.encode16(case: :lower)
+
+    assert person_dto["PrimaryImageTag"] == expected
+    assert people_entry["PrimaryImageTag"] == expected
   end
 
   test "builds DisplayTitle and ChannelLayout for audio streams" do

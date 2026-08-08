@@ -141,6 +141,10 @@ defmodule HivefinWeb.Router do
     get "/Playback/BitrateTest", PlaybackController, :bitrate_test
     get "/Items/:item_id", ItemsController, :show
 
+    # Cast/crew browsing. Addressed by NAME, not id — upstream's contract.
+    get "/Persons", PersonsController, :index
+    get "/Persons/:name", PersonsController, :show
+
     # Latest/Resume before Items/:item_id so those names are not captured as ids
     get "/Users/:user_id/Items/Latest", ItemsController, :latest
     get "/Users/:user_id/Items/Resume", ItemsController, :resume

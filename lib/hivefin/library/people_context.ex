@@ -10,6 +10,72 @@ defmodule Hivefin.Library.PeopleContext do
   alias Hivefin.Library.{Image, ItemPerson, Person}
   alias Hivefin.Repo
 
+  # GET /Persons has no natural scope (no ParentId/library to narrow it, unlike
+  # /Items) and the table is 162,800+ rows in production — an unpaged request
+  # must not try to serialize the whole thing. ItemsController.latest/2 sets
+  # the same kind of precedent (defaults Limit to 16 when absent) for the same
+  # reason. Only applied when the caller omits :limit entirely; an explicit
+  # Limit (even a huge one) is the client's call, same as ItemsController.
+  @default_list_limit 100
+
+  @doc """
+  A page of people plus the total count, ordered by sort_name.
+
+  `opts`:
+  - `:start_index` — offset, defaults to 0
+  - `:limit` — page size; defaults to #{@default_list_limit} when omitted
+    (never omitted from the query — see the moduledoc note on production scale)
+  - `:search_term` — case-insensitive substring match against sort_name
+  """
+  def list_people(opts \\ []) do
+    start_index = Keyword.get(opts, :start_index, 0)
+    limit = Keyword.get(opts, :limit) || @default_list_limit
+    search = Keyword.get(opts, :search_term)
+
+    base =
+      from(p in Person, order_by: [asc: p.sort_name])
+      |> then(fn q ->
+        if is_binary(search) and search != "" do
+          pattern = "%#{String.downcase(search)}%"
+          from(p in q, where: like(p.sort_name, ^pattern))
+        else
+          q
+        end
+      end)
+
+    total = Repo.aggregate(base, :count)
+
+    page =
+      base
+      |> offset(^start_index)
+      |> limit(^limit)
+      |> Repo.all()
+
+    {page, total}
+  end
+
+  @doc """
+  Looks a person up by exact name, case-insensitively.
+
+  Jellyfin addresses `/Persons/{name}` by name, not id. Names are not unique
+  at this scale (162,800 people) — two people can share a name — so ties are
+  broken deterministically by lowest `id` (`order_by` + the query's implicit
+  `limit: 1` mean only one row is ever fetched) rather than left to whatever
+  order Postgres happens to return, which is not guaranteed stable across
+  plans. This mirrors upstream Jellyfin, which has no dedup story for
+  same-named people either — an arbitrary-but-stable pick is not a
+  regression.
+  """
+  def get_person_by_name(name) when is_binary(name) do
+    Repo.one(
+      from(p in Person,
+        where: p.sort_name == ^String.downcase(name),
+        order_by: [asc: p.id],
+        limit: 1
+      )
+    )
+  end
+
   @doc """
   Replaces an item's cast and crew. Returns `{:ok, links_written}`.
 

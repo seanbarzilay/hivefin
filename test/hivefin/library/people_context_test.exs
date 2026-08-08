@@ -257,6 +257,85 @@ defmodule Hivefin.Library.PeopleContextTest do
     assert updated_ids == ascending_ids
   end
 
+  defp insert_person!(name) do
+    %Person{} |> Person.changeset(%{name: name}) |> Repo.insert!()
+  end
+
+  describe "list_people/1" do
+    test "orders by sort_name and reports an accurate total" do
+      marker = "listpeople-#{System.unique_integer([:positive])}"
+      names = ["#{marker} Charlie", "#{marker} Alice", "#{marker} Bob"]
+      Enum.each(names, &insert_person!/1)
+
+      {page, total} = PeopleContext.list_people(search_term: marker)
+
+      assert total == 3
+      assert Enum.map(page, & &1.name) == Enum.sort(names)
+    end
+
+    test "start_index and limit page through a scoped result set" do
+      marker = "listpeople-page-#{System.unique_integer([:positive])}"
+      for n <- 1..5, do: insert_person!("#{marker} #{n}")
+
+      {page, total} = PeopleContext.list_people(search_term: marker, start_index: 2, limit: 2)
+
+      assert total == 5
+      assert length(page) == 2
+    end
+
+    test "SearchTerm matches case-insensitively against sort_name" do
+      marker = "listpeople-search-#{System.unique_integer([:positive])}"
+      insert_person!("#{marker} Glenn Close")
+      insert_person!("#{marker} Kevin Lima")
+
+      {page, total} = PeopleContext.list_people(search_term: String.upcase("#{marker} glenn"))
+
+      assert total == 1
+      assert hd(page).name == "#{marker} Glenn Close"
+    end
+
+    test "an unpaged call (no :limit) never returns the whole table — a default caps it" do
+      # Production scale is 162,800 people rows; GET /Persons with no paging
+      # params must not attempt to serialize that. 105 is deliberately more
+      # than the cap this context imposes, to prove one is actually applied.
+      marker = "listpeople-cap-#{System.unique_integer([:positive])}"
+      for n <- 1..105, do: insert_person!("#{marker} #{n}")
+
+      {page, total} = PeopleContext.list_people(search_term: marker)
+
+      assert total == 105
+      assert length(page) == 100
+    end
+  end
+
+  describe "get_person_by_name/1" do
+    test "looks up a person case-insensitively" do
+      name = "Mixed Case #{System.unique_integer([:positive])}"
+      insert_person!(name)
+
+      assert PeopleContext.get_person_by_name(String.upcase(name)).name == name
+    end
+
+    test "returns nil for a name nobody has" do
+      refute PeopleContext.get_person_by_name(
+               "Nobody At All #{System.unique_integer([:positive])}"
+             )
+    end
+
+    test "two people sharing a name resolve to the same row every time (deterministic tie-break)" do
+      name = "Duplicate Name #{System.unique_integer([:positive])}"
+      a = insert_person!(name)
+      b = insert_person!(name)
+
+      expected_id = Enum.min([a.id, b.id])
+
+      assert PeopleContext.get_person_by_name(name).id == expected_id
+      # Called again: must be stable, not whatever order Postgres feels like
+      # handing back for an otherwise-unordered duplicate match.
+      assert PeopleContext.get_person_by_name(name).id == expected_id
+    end
+  end
+
   test "two crew jobs collapsing to the same type and role insert without raising" do
     item = make_item("102 Dalmatians")
 

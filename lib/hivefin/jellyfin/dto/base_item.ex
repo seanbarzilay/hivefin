@@ -9,7 +9,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
   alias Hivefin.Jellyfin.Id
   alias Hivefin.Jellyfin.SystemInfo
-  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, UserData}
+  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, Person, UserData}
   alias Hivefin.Metadata.ImageCache
 
   @type field_opt :: String.t() | atom()
@@ -86,6 +86,58 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "ImageTags" => %{},
       "UserData" => user_data(Keyword.get(opts, :user_data))
     }
+  end
+
+  @doc """
+  Builds a BaseItemDto map for a `Person` (`/Persons` listing and lookup).
+
+  `Id` and `Type` are the only fields jellyfin-sdk-kotlin's generated
+  `BaseItemDto` has no default for — miss either and `MissingFieldException`
+  makes the client silently discard the whole object. Everything else here
+  (`Name`, `ServerId`, `IsFolder`, `PlayAccess`, `LocationType`, `SortName`,
+  `ProviderIds`, `ImageTags`, `PrimaryImageTag`, `UserData`) is technically
+  optional per the SDK but emitted anyway, unconditionally, for the same
+  reason `from_item/2` always emits them for every other item type:
+  jellyfin-web's generic card/list rendering dereferences these without a
+  null guard regardless of `Type` — the same trap that produced the
+  PlayState/AdditionalUsers crashes referenced in `person_entry/1` below.  A
+  Person is not a second, thinner BaseItemDto contract some renderer trips
+  over.
+
+  Fields that genuinely don't apply to a person — not playable, not part of
+  the item tree — are simply absent (nil, dropped by `drop_nils/1`): no
+  `MediaSources`/`RunTimeTicks` (not playable; `MediaType` is omitted the
+  same way Series/Season already omit it in production — kotlinx.serialization
+  defaults `MediaType` to `Unknown` when the key is missing, so this is not a
+  new risk), no `ParentId`/`SeriesId`/`SeasonId`/`ProductionYear`/`Overview`
+  (no parent, no release metadata).
+
+  `PrimaryImageTag`/`ImageTags` are derived straight from `profile_path` via
+  the same `image_tag/1` hash `person_entry/1` uses — never from a per-person
+  `images` table query, and never a second hashing implementation.
+  """
+  def from_person(%Person{} = person) do
+    image_tags =
+      case person.profile_path do
+        path when is_binary(path) and path != "" -> %{"Primary" => image_tag(path)}
+        _ -> %{}
+      end
+
+    %{
+      "Name" => person.name,
+      "Id" => Id.format(person.id),
+      "ServerId" => Id.format(SystemInfo.server_id()),
+      "Type" => "Person",
+      "IsFolder" => false,
+      "PlayAccess" => "None",
+      "LocationType" => "FileSystem",
+      "SortName" => person.sort_name || default_sort_name(person.name),
+      "ProviderIds" => person.provider_ids || %{},
+      "ImageTags" => image_tags,
+      "PrimaryImageTag" => Map.get(image_tags, "Primary"),
+      "UserData" => user_data(nil)
+    }
+    |> drop_nils()
   end
 
   @doc """
