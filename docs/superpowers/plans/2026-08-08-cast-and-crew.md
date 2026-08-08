@@ -280,8 +280,8 @@ git commit -m "feat: people and item_people schema"
 
 **Interfaces:**
 - Consumes: nothing from Task 1.
-- Produces: `TMDb.movie_details/1`'s returned map gains `:people` — a list of `%{tmdb_id: integer, name: String.t(), role: String.t(), type: String.t(), sort_order: integer, profile_path: String.t() | nil}`, cast first (by TMDb `order`) then allowed crew.
-- Produces: `Hivefin.Metadata.TMDb.credits_from_payload/1` — public so it can be unit-tested against a recorded payload without HTTP.
+- Produces: `TMDB.movie_details/1`'s returned map gains `:people` — a list of `%{tmdb_id: integer, name: String.t(), role: String.t(), type: String.t(), sort_order: integer | nil, profile_path: String.t() | nil}` — `sort_order` is the TMDb credited order for cast and `nil` for crew, which is what orders cast before crew downstream, cast first (by TMDb `order`) then allowed crew.
+- Produces: `Hivefin.Metadata.TMDB.credits_from_payload/1` — public so it can be unit-tested against a recorded payload without HTTP.
 
 The existing `normalize_details/1` returns `%{tmdb_id:, name:, overview:, production_year:, poster_path:, backdrop_path:, premiere_date:}`. Add `:people` to it; do not change the other keys.
 
@@ -293,7 +293,7 @@ The existing `normalize_details/1` returns `%{tmdb_id:, name:, overview:, produc
 defmodule Hivefin.Metadata.TMDbCreditsTest do
   use ExUnit.Case, async: true
 
-  alias Hivefin.Metadata.TMDb
+  alias Hivefin.Metadata.TMDB
 
   defp payload do
     %{
@@ -323,7 +323,7 @@ defmodule Hivefin.Metadata.TMDbCreditsTest do
   end
 
   test "cast maps to Actor with character and order" do
-    people = TMDb.credits_from_payload(payload())
+    people = TMDB.credits_from_payload(payload())
     cast = Enum.filter(people, &(&1.type == "Actor"))
 
     assert length(cast) == 2
@@ -332,7 +332,7 @@ defmodule Hivefin.Metadata.TMDbCreditsTest do
   end
 
   test "crew jobs map to PersonKind values" do
-    by_name = Map.new(TMDb.credits_from_payload(payload()), &{&1.name, &1.type})
+    by_name = Map.new(TMDB.credits_from_payload(payload()), &{&1.name, &1.type})
 
     assert by_name["Kevin Lima"] == "Director"
     assert by_name["Kristen Buckley"] == "Writer"
@@ -341,21 +341,21 @@ defmodule Hivefin.Metadata.TMDbCreditsTest do
   end
 
   test "unknown crew jobs are dropped, not mapped to Unknown" do
-    names = Enum.map(TMDb.credits_from_payload(payload()), & &1.name)
+    names = Enum.map(TMDB.credits_from_payload(payload()), & &1.name)
 
     refute "Some Body" in names
-    refute "Unknown" in Enum.map(TMDb.credits_from_payload(payload()), & &1.type)
+    refute "Unknown" in Enum.map(TMDB.credits_from_payload(payload()), & &1.type)
   end
 
   test "crew have an empty-string role, never nil" do
     # jellyfin-web may call .length/.trim on Role; null would throw.
-    for p <- TMDb.credits_from_payload(payload()), p.type != "Actor" do
+    for p <- TMDB.credits_from_payload(payload()), p.type != "Actor" do
       assert p.role == ""
     end
   end
 
   test "cast sorts before crew, and cast keeps TMDb order" do
-    people = TMDb.credits_from_payload(payload())
+    people = TMDB.credits_from_payload(payload())
     types = Enum.map(people, & &1.type)
 
     assert Enum.take(types, 2) == ["Actor", "Actor"]
@@ -364,8 +364,8 @@ defmodule Hivefin.Metadata.TMDbCreditsTest do
 
   test "a payload with no credits yields an empty list" do
     # Entries cached before append_to_response was added have no credits key.
-    assert TMDb.credits_from_payload(%{"id" => 1, "title" => "Old Cache Entry"}) == []
-    assert TMDb.credits_from_payload(%{}) == []
+    assert TMDB.credits_from_payload(%{"id" => 1, "title" => "Old Cache Entry"}) == []
+    assert TMDB.credits_from_payload(%{}) == []
   end
 end
 ```
@@ -373,7 +373,7 @@ end
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `mix test test/hivefin/metadata/tmdb_credits_test.exs`
-Expected: FAIL — `function Hivefin.Metadata.TMDb.credits_from_payload/1 is undefined`
+Expected: FAIL — `function Hivefin.Metadata.TMDB.credits_from_payload/1 is undefined`
 
 - [ ] **Step 3a: Request credits**
 
@@ -1110,7 +1110,7 @@ git commit -m "feat: person-owned images with a one-owner DB constraint"
 - Test: `test/hivefin/jellyfin/dto/base_item_people_test.exs` (extend)
 
 **Interfaces:**
-- Consumes: `ImageCache.store_person/2` (Task 5), `TMDb.image_url/2` (existing, `image_url(path, size)`).
+- Consumes: `ImageCache.store_person/2` (Task 5), `TMDB.image_url/2` (existing, `image_url(path, size)`).
 - Produces: `BaseItemPerson["PrimaryImageTag"]` — present only for people who have a cached image; **absent** otherwise, never null.
 
 `ImageCache.image_tags_for/1` already builds tags for items; reuse the same tag derivation for a person id.
@@ -1196,7 +1196,7 @@ In `lib/hivefin/metadata/worker.ex`, where Task 3 called `replace_for_item/2`:
             item.id
             |> Hivefin.Library.PeopleContext.headshot_targets(people)
             |> Enum.each(fn {person_id, profile_path} ->
-              case Hivefin.Metadata.TMDb.image_url(profile_path, :profile) do
+              case Hivefin.Metadata.TMDB.image_url(profile_path, :profile) do
                 nil -> :ok
                 url -> Hivefin.Metadata.ImageCache.store_person(person_id, url)
               end
@@ -1207,7 +1207,7 @@ In `lib/hivefin/metadata/worker.ex`, where Task 3 called `replace_for_item/2`:
         end
 ```
 
-Check `TMDb.image_url/2`'s accepted sizes before using `:profile`; if the existing implementation only knows `:poster`/`:backdrop`, add a `:profile` size mapping to TMDb's `w185` profile path.
+Check `TMDB.image_url/2`'s accepted sizes before using `:profile`; if the existing implementation only knows `:poster`/`:backdrop`, add a `:profile` size mapping to TMDb's `w185` profile path.
 
 - [ ] **Step 3c: Emit the tag**
 
@@ -1685,8 +1685,8 @@ Deploy, then click a cast member in jellyfin-web and confirm their page lists th
 **Interfaces:**
 - Consumes: `credits_from_payload/1` (Task 2), `PeopleContext.replace_for_item/2` (Task 3).
 - Produces:
-  - `TMDb.series_details(tmdb_id) :: {:ok, map()} | {:error, term()}` — same shape as `movie_details/1`, including `:people`
-  - `TMDb.episode_credits(tmdb_id, season, episode) :: {:ok, [map()]} | {:error, term()}`
+  - `TMDB.series_details(tmdb_id) :: {:ok, map()} | {:error, term()}` — same shape as `movie_details/1`, including `:people`
+  - `TMDB.episode_credits(tmdb_id, season, episode) :: {:ok, [map()]} | {:error, term()}`
 
 **Episode people are guest stars and that episode's crew only** — not the series regulars. A client shows the series cast on the series page and guest stars on the episode; duplicating regulars onto every episode would multiply `item_people` by the episode count for no display benefit.
 
@@ -1700,7 +1700,7 @@ TMDb paths: `/tv/{id}?append_to_response=credits` and `/tv/{id}/season/{s}/episo
 defmodule Hivefin.Metadata.TvCreditsTest do
   use ExUnit.Case, async: true
 
-  alias Hivefin.Metadata.TMDb
+  alias Hivefin.Metadata.TMDB
 
   test "episode credits include guest stars as Actors" do
     payload = %{
@@ -1709,7 +1709,7 @@ defmodule Hivefin.Metadata.TvCreditsTest do
       "crew" => [%{"id" => 12, "name" => "Ep Director", "job" => "Director", "department" => "Directing", "profile_path" => nil}]
     }
 
-    people = TMDb.episode_people_from_payload(payload)
+    people = TMDB.episode_people_from_payload(payload)
     by_name = Map.new(people, &{&1.name, &1.type})
 
     assert by_name["Guest"] == "Actor"
@@ -1723,14 +1723,14 @@ defmodule Hivefin.Metadata.TvCreditsTest do
       "crew" => []
     }
 
-    names = Enum.map(TMDb.episode_people_from_payload(payload), & &1.name)
+    names = Enum.map(TMDB.episode_people_from_payload(payload), & &1.name)
 
     refute "Regular" in names
   end
 
   test "an episode payload with no guest stars or crew yields an empty list" do
-    assert TMDb.episode_people_from_payload(%{"cast" => [], "guest_stars" => [], "crew" => []}) == []
-    assert TMDb.episode_people_from_payload(%{}) == []
+    assert TMDB.episode_people_from_payload(%{"cast" => [], "guest_stars" => [], "crew" => []}) == []
+    assert TMDB.episode_people_from_payload(%{}) == []
   end
 end
 ```
