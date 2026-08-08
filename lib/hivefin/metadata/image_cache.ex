@@ -106,20 +106,42 @@ defmodule Hivefin.Metadata.ImageCache do
             # and use whatever they wrote; never touch their row.
             resolve_concurrent_write(person_id)
 
-          {:error, {:http_error, 404}} = err ->
-            # Confirmed permanent: TMDb genuinely has nothing at this path.
-            _ = mark_person_headshot_failed(person_id)
-            err
-
-          {:error, _reason} = err ->
-            # Transient (rate limit, 5xx, timeout, disk error, …): mark
+          {:error, reason} = err ->
+            # permanent_failure?/1 is the ONE classification: it decides both
+            # whether we persist a "don't retry" marker here and (in
+            # ImagesController) how long the browser is told to cache the
+            # 404. Transient (rate limit, 5xx, timeout, disk error, …) marks
             # nothing, so the next request is a genuine retry.
+            if permanent_failure?(reason), do: mark_person_headshot_failed(person_id)
             err
         end
     end
   end
 
   def store_person(_, _), do: {:error, :invalid_args}
+
+  @doc """
+  Whether a `store_person/2` `{:error, reason}` is a *confirmed permanent*
+  absence — TMDb genuinely has nothing — rather than a transient failure.
+
+  Single source of truth for two decisions that must agree and previously
+  drifted apart: whether `store_person/2` persists a "don't retry" marker,
+  and whether `ImagesController` puts a long `cache-control` on the 404 it
+  serves. When only the server side was narrowed to 404-only, a transient
+  failure the server was ready to retry immediately was still advertised to
+  the browser as absent for an hour, and the client's stale negative cache
+  defeated that retry. Both now ask this function.
+
+  `{:http_error, 404}` is the literal confirmed miss; `:no_photo` is the
+  same fact read back from an already-persisted marker (directly, or via
+  `resolve_concurrent_write/1` when another caller recorded it). Everything
+  else — `:rate_limited`, any other HTTP status, transport/timeout errors,
+  disk errors, `:race_lost`, `:invalid_args` — is transient.
+  """
+  @spec permanent_failure?(term()) :: boolean()
+  def permanent_failure?({:http_error, 404}), do: true
+  def permanent_failure?(:no_photo), do: true
+  def permanent_failure?(_), do: false
 
   defp cached_path(item_id, type) do
     path_from_image(get_image(item_id, type))

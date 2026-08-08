@@ -20,6 +20,17 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
   @max_concurrent_headshot_fetches 10
   @headshot_gate_key {__MODULE__, :headshot_fetch_gate}
 
+  # A confirmed miss is durable: it only changes when a metadata refresh
+  # changes profile_path, which also clears the server-side marker. Worth an
+  # hour of client-side caching — that's the whole point of the marker, since
+  # this route is unauthenticated.
+  @confirmed_miss_cache_control "public, max-age=3600"
+
+  # A transient miss must not be cached at all. Explicit rather than relying
+  # on whatever default the pipeline happens to set: this controller owns the
+  # decision, and the server is ready to retry on the very next request.
+  @transient_miss_cache_control "no-store"
+
   @doc """
   Serves a cached item or person image (`Primary` / `Backdrop`) when present.
 
@@ -31,10 +42,13 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
   Returns 404 when there's nothing cached and nothing to lazily fetch
   (missing item image, or a person with no `profile_path`), and also on a
   failed fetch — a broken `profile_path` or a TMDb error must never 500 this
-  request. A *confirmed* failure (TMDb genuinely has nothing, or a prior
-  attempt already marked it so — see `ImageCache.store_person/2`) gets a
-  `cache-control` header so an unauthenticated caller can't force a
-  re-attempt, and thus a fresh outbound TMDb call, on every view forever.
+  request. A *confirmed* miss (TMDb genuinely has nothing, or a prior attempt
+  already marked it so — see `ImageCache.permanent_failure?/1`) gets a long
+  `cache-control` so an unauthenticated caller can't force a re-attempt, and
+  thus a fresh outbound TMDb call, on every view forever. A *transient*
+  failure gets `no-store` instead: the server is ready to retry it on the
+  very next request, so the browser must not be holding a stale negative
+  cache that stops it from ever asking again.
   """
   def show(conn, %{"item_id" => item_id, "image_type" => image_type}) do
     item_id = Id.coerce(item_id)
@@ -46,14 +60,14 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
       :error ->
         case fetch_person_headshot(item_id, image_type) do
           {:ok, path} -> serve(conn, path)
-          :confirmed_miss -> not_found(conn, cacheable: true)
-          :error -> not_found(conn, cacheable: false)
+          :confirmed_miss -> not_found(conn, @confirmed_miss_cache_control)
+          :transient_miss -> not_found(conn, @transient_miss_cache_control)
         end
     end
   end
 
   def show(conn, _params) do
-    not_found(conn, cacheable: false)
+    not_found(conn, @transient_miss_cache_control)
   end
 
   # The concurrency gate wraps the whole lookup+fetch, not just the download:
@@ -68,7 +82,9 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
         release_headshot_slot()
       end
     else
-      _ -> :error
+      # Not a person image request at all, or the concurrency cap rejected
+      # this one. Neither says anything durable about the image.
+      _ -> :transient_miss
     end
   end
 
@@ -84,14 +100,30 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
          url when is_binary(url) <- provider().image_url(profile_path, :profile) do
       case ImageCache.store_person(person_id, url) do
         {:ok, path} -> {:ok, path}
-        # store_person/2 has either just persisted a "don't retry" marker,
-        # or hit one that already existed — either way this is a durable
-        # "no photo", safe to cache client-side.
-        {:error, _reason} -> :confirmed_miss
+        {:error, reason} -> miss_kind(reason)
       end
     else
-      _ -> :error
+      # The person exists and has no profile_path at all: the strongest
+      # confirmed miss there is — we know there's no photo without asking
+      # anyone, and it stays true until a refresh sets one (the same event
+      # that clears a server-side marker).
+      %Person{} ->
+        :confirmed_miss
+
+      # Not a person id at all (an item whose image simply isn't cached yet),
+      # or the provider produced no URL. Nothing durable here.
+      _ ->
+        :transient_miss
     end
+  end
+
+  # The one classification, owned by ImageCache: the same predicate decides
+  # whether the server persists a "don't retry" marker and how long the
+  # browser is told to cache this 404. Two parallel lists is exactly how
+  # these drifted apart before — the server stopped marking transient
+  # failures while this endpoint kept telling browsers they were durable.
+  defp miss_kind(reason) do
+    if ImageCache.permanent_failure?(reason), do: :confirmed_miss, else: :transient_miss
   end
 
   defp provider, do: Application.get_env(:hivefin, :metadata_provider, TMDB)
@@ -137,20 +169,12 @@ defmodule HivefinWeb.Jellyfin.ImagesController do
     |> send_file(200, path)
   end
 
-  defp not_found(conn, cacheable: cacheable?) do
+  defp not_found(conn, cache_control) do
     conn
-    |> maybe_cache_control(cacheable?)
+    |> put_resp_header("cache-control", cache_control)
     |> put_status(:not_found)
     |> json(%{"error" => "image_not_found"})
   end
-
-  # Only a confirmed failure (persisted negative-cache marker) gets this —
-  # a transient miss (concurrency cap, no profile_path yet) must stay
-  # uncached so the very next view can succeed once conditions change.
-  defp maybe_cache_control(conn, true),
-    do: put_resp_header(conn, "cache-control", "public, max-age=3600")
-
-  defp maybe_cache_control(conn, false), do: conn
 
   defp content_type(path) do
     case path |> Path.extname() |> String.downcase() do

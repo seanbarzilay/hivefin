@@ -8,6 +8,11 @@ defmodule Hivefin.Metadata.ImageCacheTest do
   alias Hivefin.Metadata.TMDB
   alias Hivefin.Repo
 
+  # The concurrency-race test below commits real, non-sandboxed rows. They are
+  # identified by this name so cleanup can be registered before the first
+  # INSERT and re-run at the start of the test — see the comment there.
+  @race_person_name "Race Person"
+
   setup do
     Req.Test.verify_on_exit!()
 
@@ -167,10 +172,37 @@ defmodule Hivefin.Metadata.ImageCacheTest do
     # Everything the winner touches (person + its committed Image row) must
     # be real, committed rows for its separate connection to see them as
     # valid — hence checkout(sandbox: false) confined to the winner Task
-    # (and to on_exit's cleanup), never to this test's own main process, so
+    # (and to the purge below), never to this test's own main process, so
     # Hivefin.DataCase's own sandbox/owner lifecycle is left alone.
+    #
+    # Those rows are NOT rolled back by the sandbox, so cleanup has to be
+    # unconditional. It is registered BEFORE anything is committed and keyed
+    # on the person's *name*, not on an id the winner hasn't generated yet:
+    # an earlier version registered it after `receive`, so a winner that died
+    # between its INSERT and its signal (or an interrupted run) left the row
+    # behind permanently — surviving later runs and even a `git stash` of the
+    # code, which is how it got mistaken for baseline flakiness. Running the
+    # same purge up front makes the test self-healing against any such
+    # leftover. `images.person_id` is ON DELETE CASCADE, so deleting the
+    # person takes its image row with it.
     body = "shared-photo-bytes"
     test_pid = self()
+
+    purge = fn ->
+      task =
+        Task.async(fn ->
+          :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
+
+          Repo.delete_all(from(p in Hivefin.Library.Person, where: p.name == ^@race_person_name))
+
+          Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+        end)
+
+      Task.await(task, 5000)
+    end
+
+    purge.()
+    on_exit(purge)
 
     winner =
       Task.async(fn ->
@@ -178,7 +210,7 @@ defmodule Hivefin.Metadata.ImageCacheTest do
 
         {:ok, person} =
           %Hivefin.Library.Person{}
-          |> Hivefin.Library.Person.changeset(%{name: "Race Person"})
+          |> Hivefin.Library.Person.changeset(%{name: @race_person_name})
           |> Repo.insert()
 
         path = Path.join([dir, person.id, "primary.jpg"])
@@ -215,18 +247,6 @@ defmodule Hivefin.Metadata.ImageCacheTest do
       after
         1000 -> flunk("winner never signaled readiness")
       end
-
-    on_exit(fn ->
-      cleanup =
-        Task.async(fn ->
-          :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
-          Repo.delete_all(from(i in Image, where: i.person_id == ^person_id))
-          Repo.delete_all(from(p in Hivefin.Library.Person, where: p.id == ^person_id))
-          Ecto.Adapters.SQL.Sandbox.checkin(Repo)
-        end)
-
-      Task.await(cleanup, 5000)
-    end)
 
     Req.Test.stub(TMDB, fn conn ->
       conn

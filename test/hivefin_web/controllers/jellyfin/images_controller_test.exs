@@ -201,11 +201,55 @@ defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
     conn = get(conn, ~p"/Items/#{entry.person.id}/Images/Primary")
 
     assert conn.status == 404
-    # Unlike a confirmed TMDb failure, this is not persisted anywhere — the
-    # unauthenticated caller can't force a durable negative-cache write, so
-    # this must NOT carry the long-lived cache-control a confirmed failure
-    # gets (Phoenix's own default JSON cache-control is fine here).
+    # A confirmed miss, and the strongest kind: the server knows there is no
+    # photo without asking TMDb at all, and that stays true until a refresh
+    # sets a profile_path — the same event that clears a 404 marker. Same
+    # classification, therefore the same long cache-control.
+    assert get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
+  end
+
+  test "a transient TMDb failure 404s WITHOUT the long cache-control", %{conn: conn} do
+    entry = person_with_photo(47, "Flaky Photo Person", "/flaky.jpg")
+
+    Req.Test.stub(TMDB, fn tmdb_conn ->
+      tmdb_conn |> Plug.Conn.put_status(500) |> Plug.Conn.send_resp(500, "")
+    end)
+
+    conn = get(conn, ~p"/Items/#{entry.person.id}/Images/Primary")
+    assert conn.status == 404
+
+    # The server marked nothing and will retry on the very next request
+    # (asserted below). Telling the browser this face is absent for an hour
+    # would defeat exactly that retry.
     refute get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
+
+    # And the retry really is available immediately: a working stub succeeds.
+    Req.Test.stub(TMDB, fn tmdb_conn ->
+      tmdb_conn
+      |> Plug.Conn.put_resp_content_type("image/jpeg")
+      |> Plug.Conn.send_resp(200, "recovered-bytes")
+    end)
+
+    conn2 = get(build_conn(), "/Items/#{entry.person.id}/Images/Primary")
+    assert conn2.status == 200
+    assert conn2.resp_body == "recovered-bytes"
+  end
+
+  test "a rate-limit rejection 404s WITHOUT the long cache-control", %{conn: conn} do
+    entry = person_with_photo(48, "Rate Limited Person", "/limited.jpg")
+    force_rate_limiter_rejection()
+
+    # No Req.Test.stub configured: the rate limiter must fail closed before
+    # any HTTP attempt, so reaching TMDb here would raise instead of 404ing.
+    conn = get(conn, ~p"/Items/#{entry.person.id}/Images/Primary")
+
+    assert conn.status == 404
+    refute get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
+
+    # Nothing was persisted, so the next request is a genuine retry.
+    refute Repo.get_by(Image, person_id: entry.person.id, type: :primary)
   end
 
   test "GET Primary for a confirmed-failed headshot 404s with cache-control and is never retried",
@@ -297,6 +341,9 @@ defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
     # Nowhere near RateLimiter.checkout/1's 120s call timeout — this must
     # fail fast, not queue.
     assert elapsed_us < 1_000_000
+    # A cap rejection says nothing about whether the photo exists — the next
+    # view, once the burst clears, must be allowed to try again.
+    refute get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
   end
 
   test "a changed profile_path is a genuine cache miss and fetches the new photo", %{conn: conn} do
@@ -363,5 +410,56 @@ defmodule HivefinWeb.Jellyfin.ImagesControllerTest do
     conn2 = get(build_conn(), "/Items/#{entry.person.id}/Images/Primary")
     assert conn2.status == 200
     assert conn2.resp_body == "new-photo-bytes"
+  end
+
+  defp person_with_photo(tmdb_id, name, profile_path) do
+    lib_path = Path.join(System.tmp_dir!(), "img-ctrl-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(lib_path)
+    on_exit(fn -> File.rm_rf(lib_path) end)
+
+    {:ok, library} = LibraryContext.create_library(%{name: name, type: :movies, path: lib_path})
+
+    {:ok, movie, :created} =
+      LibraryContext.find_or_create_movie(library.id, %{name: name, production_year: 2020})
+
+    assert {:ok, 1} =
+             PeopleContext.replace_for_item(movie.id, [
+               %{
+                 tmdb_id: tmdb_id,
+                 name: name,
+                 role: "",
+                 type: "Actor",
+                 sort_order: 0,
+                 profile_path: profile_path
+               }
+             ])
+
+    [entry] = PeopleContext.list_for_item(movie.id)
+    entry
+  end
+
+  # Drives RateLimiter.checkout/0 down its fail-closed `:error` branch by
+  # swapping the named limiter for a process that dies without replying —
+  # same observable outcome as a real exhaustion, without waiting out the
+  # limiter's 120s call timeout. Safe here: this file is async: false, so it
+  # runs in ExUnit's serial phase with no other test in flight.
+  defp force_rate_limiter_rejection do
+    limiter = Hivefin.Metadata.RateLimiter
+    real = Process.whereis(limiter)
+    if is_pid(real), do: Process.unregister(limiter)
+
+    stub =
+      spawn(fn ->
+        receive do
+          _ -> exit(:rate_limited)
+        end
+      end)
+
+    Process.register(stub, limiter)
+
+    on_exit(fn ->
+      if Process.whereis(limiter) == stub, do: Process.unregister(limiter)
+      if is_pid(real) and Process.alive?(real), do: Process.register(real, limiter)
+    end)
   end
 end
