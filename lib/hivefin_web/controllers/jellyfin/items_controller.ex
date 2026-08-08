@@ -3,6 +3,7 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
   alias Hivefin.Jellyfin.Dto.BaseItem
   alias Hivefin.Jellyfin.Dto.UserData, as: UserDataDto
+  alias Hivefin.Jellyfin.Params
   alias Hivefin.Library.{Item, Library, LibraryContext, UserData}
 
   def views(conn, _params) do
@@ -295,9 +296,7 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     ]
   end
 
-  defp clamp_non_neg(nil), do: nil
-  defp clamp_non_neg(n) when is_integer(n) and n < 0, do: 0
-  defp clamp_non_neg(n) when is_integer(n), do: n
+  defdelegate clamp_non_neg(n), to: Params
 
   defp parse_include_types(nil), do: nil
   defp parse_include_types(""), do: nil

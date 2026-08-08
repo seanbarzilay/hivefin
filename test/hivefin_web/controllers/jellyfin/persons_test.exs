@@ -45,19 +45,29 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
       })
       |> Repo.insert()
 
+    # Deliberately NOT the tmdb_id: 3084/"Glenn Close" + tmdb_id: 1/"Kevin
+    # Lima" pair five other test files already hardcode — reusing it here
+    # raised the odds of hitting PeopleContext.upsert_person/1's concurrent
+    # insert path for the exact same two rows across files running async.
+    # A fresh unique_integer per test run means this file never contends
+    # with (or with itself, across its own async tests) any other consumer.
+    tmdb_base = System.unique_integer([:positive])
+    actor_name = "Persons Test Actor #{tmdb_base}"
+    director_name = "Persons Test Director #{tmdb_base + 1}"
+
     {:ok, _} =
       PeopleContext.replace_for_item(item.id, [
         %{
-          tmdb_id: 3084,
-          name: "Glenn Close",
-          role: "Cruella De Vil",
+          tmdb_id: tmdb_base,
+          name: actor_name,
+          role: "Lead",
           type: "Actor",
           sort_order: 0,
           profile_path: nil
         },
         %{
-          tmdb_id: 1,
-          name: "Kevin Lima",
+          tmdb_id: tmdb_base + 1,
+          name: director_name,
           role: "",
           type: "Director",
           sort_order: nil,
@@ -72,7 +82,12 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
         ~s(MediaBrowser Client="Jellyfin Web", Device="D", DeviceId="d", Version="10.10.7", Token="#{token}")
       )
 
-    {:ok, conn: conn, item: item}
+    {:ok,
+     conn: conn,
+     item: item,
+     tmdb_base: tmdb_base,
+     actor_name: actor_name,
+     director_name: director_name}
   end
 
   test "GET /Persons returns a query result", %{conn: conn} do
@@ -93,29 +108,55 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
     assert body["StartIndex"] == 1
   end
 
-  test "GET /Persons filters by SearchTerm", %{conn: conn} do
-    body = json_response(get(conn, "/Persons?SearchTerm=glenn"), 200)
+  test "GET /Persons treats a negative Limit as zero instead of raising", %{conn: conn} do
+    # Postgres raises "LIMIT must not be negative" rather than tolerating
+    # one — this must come back as a normal (if empty) page, never a 500.
+    body = json_response(get(conn, "/Persons?Limit=-1"), 200)
 
-    assert length(body["Items"]) == 1
-    assert hd(body["Items"])["Name"] == "Glenn Close"
+    assert body["Items"] == []
+    # The total is independent of the (clamped-to-zero) page size.
+    assert body["TotalRecordCount"] == 2
   end
 
-  test "GET /Persons/:name returns one person by NAME", %{conn: conn} do
-    body = json_response(get(conn, "/Persons/Glenn%20Close"), 200)
+  test "GET /Persons treats a negative StartIndex as zero instead of raising", %{conn: conn} do
+    # Postgres raises "OFFSET must not be negative" rather than tolerating
+    # one — a negative StartIndex must behave like 0, not 500.
+    body = json_response(get(conn, "/Persons?StartIndex=-5"), 200)
 
-    assert body["Name"] == "Glenn Close"
+    assert body["StartIndex"] == 0
+    assert length(body["Items"]) == 2
+  end
+
+  test "GET /Persons filters by SearchTerm", %{
+    conn: conn,
+    tmdb_base: tmdb_base,
+    actor_name: actor_name
+  } do
+    # tmdb_base appears only in the actor's name (the director's is
+    # tmdb_base + 1), so this can only ever match the one row.
+    body = json_response(get(conn, "/Persons?SearchTerm=#{tmdb_base}"), 200)
+
+    assert length(body["Items"]) == 1
+    assert hd(body["Items"])["Name"] == actor_name
+  end
+
+  test "GET /Persons/:name returns one person by NAME", %{conn: conn, actor_name: actor_name} do
+    body = json_response(get(conn, "/Persons/" <> URI.encode(actor_name)), 200)
+
+    assert body["Name"] == actor_name
     assert body["Type"] == "Person"
     assert body["Id"]
   end
 
   test "GET /Persons/:name handles punctuation and non-ASCII characters in the name", %{
     conn: conn,
-    item: item
+    item: item,
+    tmdb_base: tmdb_base
   } do
     {:ok, _} =
       PeopleContext.replace_for_item(item.id, [
         %{
-          tmdb_id: 555,
+          tmdb_id: tmdb_base + 2,
           name: "J.J. Abrams",
           role: "",
           type: "Director",
@@ -123,7 +164,7 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
           profile_path: nil
         },
         %{
-          tmdb_id: 556,
+          tmdb_id: tmdb_base + 3,
           name: "Penélope Cruz",
           role: "Herself",
           type: "Actor",

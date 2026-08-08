@@ -257,6 +257,67 @@ defmodule Hivefin.Library.PeopleContextTest do
     assert updated_ids == ascending_ids
   end
 
+  test "new-person inserts run in ascending TMDb id order (deadlock-avoidance sort)" do
+    # Doesn't (can't, without a genuine concurrent deadlock) prove the
+    # deadlock is avoided — it proves the sort that avoids it is actually
+    # applied, the same cheap/reliable half of the guarantee the analogous
+    # update-order test above checks. update_profile_path/2's sort covers
+    # people that already exist; it can't cover this path, since a
+    # brand-new person has no id to sort by until AFTER this INSERT runs —
+    # tmdb_id is what's known up front, so that's the sort key here.
+    item = make_item("Sorted Insert Order")
+
+    # Spread out and randomized per run so this never collides with another
+    # test's own tmdb ids, and deliberately fed in non-ascending order —
+    # TMDb's own credit order has nothing to do with tmdb_id — to prove the
+    # sort is actually applied, not coincidentally already sorted.
+    base = System.unique_integer([:positive]) * 10
+
+    credits = [
+      %{tmdb_id: base + 4, name: "D", role: "", type: "Actor", sort_order: 3, profile_path: nil},
+      %{tmdb_id: base + 1, name: "A", role: "", type: "Actor", sort_order: 0, profile_path: nil},
+      %{tmdb_id: base + 3, name: "C", role: "", type: "Actor", sort_order: 2, profile_path: nil},
+      %{tmdb_id: base + 2, name: "B", role: "", type: "Actor", sort_order: 1, profile_path: nil}
+    ]
+
+    test_pid = self()
+    handler_id = "people-insert-order-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:hivefin, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if self() == test_pid and metadata.source == "people" and is_binary(metadata.query) and
+             String.starts_with?(metadata.query, "INSERT") do
+          tmdb_id =
+            Enum.find_value(metadata.params, fn
+              %{"Tmdb" => tmdb} -> tmdb
+              _ -> nil
+            end)
+
+          send(test_pid, {:person_insert, tmdb_id})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, 4} = PeopleContext.replace_for_item(item.id, credits)
+
+    inserted_order =
+      Stream.repeatedly(fn ->
+        receive do
+          {:person_insert, tmdb_id} -> tmdb_id
+        after
+          50 -> nil
+        end
+      end)
+      |> Enum.take_while(& &1)
+
+    assert inserted_order == Enum.map([base + 1, base + 2, base + 3, base + 4], &to_string/1)
+  end
+
   defp insert_person!(name) do
     %Person{} |> Person.changeset(%{name: name}) |> Repo.insert!()
   end
@@ -305,6 +366,109 @@ defmodule Hivefin.Library.PeopleContextTest do
 
       assert total == 105
       assert length(page) == 100
+    end
+
+    test "clamps a negative :limit to zero instead of raising" do
+      # Postgres raises "LIMIT must not be negative" rather than tolerating
+      # one.
+      marker = "listpeople-neg-limit-#{System.unique_integer([:positive])}"
+      insert_person!("#{marker} A")
+      insert_person!("#{marker} B")
+
+      {page, total} = PeopleContext.list_people(search_term: marker, limit: -1)
+
+      assert page == []
+      assert total == 2
+    end
+
+    test "clamps a negative :start_index to zero instead of raising" do
+      # Postgres raises "OFFSET must not be negative" rather than
+      # tolerating one.
+      marker = "listpeople-neg-start-#{System.unique_integer([:positive])}"
+      insert_person!("#{marker} A")
+      insert_person!("#{marker} B")
+
+      {page, total} = PeopleContext.list_people(search_term: marker, start_index: -5)
+
+      assert length(page) == 2
+      assert total == 2
+    end
+
+    test "orders by sort_name with id as a deterministic secondary sort key" do
+      # Duplicate sort_name is routine at 162,800 rows (common surnames), and
+      # the table takes continuous concurrent writes from background
+      # metadata refresh — SQL guarantees nothing about the relative order
+      # of tied rows across two separate OFFSET/LIMIT queries without a
+      # secondary sort key. Asserting the actual generated SQL (rather than
+      # just observed row order, which can look stable purely by
+      # insertion-order luck on a small, single-connection, otherwise
+      # untouched table) is what actually pins this down.
+      test_pid = self()
+      handler_id = "list-people-order-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:hivefin, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid and metadata.source == "people" and is_binary(metadata.query) do
+            send(test_pid, {:query, metadata.query})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      PeopleContext.list_people(limit: 1)
+
+      # list_people/1 fires two "people" queries — the plain COUNT(*) for
+      # the total, and the paged SELECT with the ORDER BY under test — so
+      # pick the one that actually has one, rather than assuming order.
+      queries =
+        Stream.repeatedly(fn ->
+          receive do
+            {:query, sql} -> sql
+          after
+            50 -> nil
+          end
+        end)
+        |> Enum.take_while(& &1)
+
+      sql = Enum.find(queries, &(&1 =~ ~r/order by/i))
+      assert sql, "expected a query with ORDER BY, got: #{inspect(queries)}"
+
+      [_, order_clause] = String.split(sql, ~r/order by/i, parts: 2)
+      [order_clause | _] = String.split(order_clause, ~r/limit/i, parts: 2)
+      downcased = String.downcase(order_clause)
+
+      assert downcased =~ "sort_name"
+      assert downcased =~ "id"
+
+      {sort_name_pos, _} = :binary.match(downcased, "sort_name")
+      {id_pos, _} = :binary.match(downcased, "\"id\"")
+
+      assert sort_name_pos < id_pos,
+             "expected id to be a secondary sort key after sort_name, got: #{order_clause}"
+    end
+
+    test "paging returns each person exactly once even when many rows share the same sort_name" do
+      # All 5 rows below get the identical sort_name (name is verbatim, no
+      # per-row suffix) — the exact scenario a plain sort_name-only ORDER BY
+      # cannot page safely across multiple OFFSET/LIMIT calls.
+      marker = "duplicate-sort-#{System.unique_integer([:positive])}"
+      ids = for _ <- 1..5, do: insert_person!(marker).id
+
+      seen =
+        [0, 2, 4]
+        |> Enum.flat_map(fn start_index ->
+          {page, _total} =
+            PeopleContext.list_people(search_term: marker, start_index: start_index, limit: 2)
+
+          Enum.map(page, & &1.id)
+        end)
+
+      assert length(seen) == 5
+      assert Enum.sort(seen) == Enum.sort(ids)
     end
   end
 

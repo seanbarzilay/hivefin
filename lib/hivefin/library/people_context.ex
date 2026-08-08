@@ -7,6 +7,7 @@ defmodule Hivefin.Library.PeopleContext do
   """
   import Ecto.Query
 
+  alias Hivefin.Jellyfin.Params
   alias Hivefin.Library.{Image, ItemPerson, Person}
   alias Hivefin.Repo
 
@@ -19,21 +20,37 @@ defmodule Hivefin.Library.PeopleContext do
   @default_list_limit 100
 
   @doc """
-  A page of people plus the total count, ordered by sort_name.
+  A page of people plus the total count, ordered by sort_name (id as a
+  tie-breaker — see the moduledoc note below on why that's required).
 
   `opts`:
-  - `:start_index` — offset, defaults to 0
+  - `:start_index` — offset, defaults to 0. Negative values are clamped to 0
+    (Postgres raises on a negative OFFSET rather than tolerating one).
   - `:limit` — page size; defaults to #{@default_list_limit} when omitted
-    (never omitted from the query — see the moduledoc note on production scale)
+    (never omitted from the query — see the moduledoc note on production
+    scale). Negative values are clamped to 0 for the same reason (Postgres
+    raises on a negative LIMIT); an explicit non-negative value, however
+    large, is passed through as-is — the client's call, same as `:limit`.
   - `:search_term` — case-insensitive substring match against sort_name
   """
   def list_people(opts \\ []) do
-    start_index = Keyword.get(opts, :start_index, 0)
-    limit = Keyword.get(opts, :limit) || @default_list_limit
+    start_index = Params.clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
+    limit = Params.clamp_non_neg(Keyword.get(opts, :limit)) || @default_list_limit
     search = Keyword.get(opts, :search_term)
 
+    # sort_name alone is not enough at 162,800 rows: common-surname
+    # collisions are routine, and the table takes continuous concurrent
+    # writes from background metadata refresh. SQL guarantees nothing
+    # about the relative order of tied rows across two separate
+    # OFFSET/LIMIT queries, so a client paging StartIndex=0,100,200... on
+    # sort_name alone can see a person twice or miss one — either when a
+    # write lands near a page boundary, or simply because the planner
+    # picks a different scan strategy as the table grows. `id` never ties,
+    # so appending it (same tie-break `get_person_by_name/1` already uses
+    # for duplicate names) makes the order — and therefore the pages —
+    # fully deterministic.
     base =
-      from(p in Person, order_by: [asc: p.sort_name])
+      from(p in Person, order_by: [asc: p.sort_name, asc: p.id])
       |> then(fn q ->
         if is_binary(search) and search != "" do
           pattern = "%#{String.downcase(search)}%"
@@ -91,6 +108,29 @@ defmodule Hivefin.Library.PeopleContext do
   def replace_for_item(item_id, people) when is_binary(item_id) and is_list(people) do
     Repo.transaction(fn ->
       Repo.delete_all(from(ip in ItemPerson, where: ip.item_id == ^item_id))
+
+      # Deterministic INSERT order for brand-new people: two movies sharing
+      # not-yet-seen cast in a different credit order (franchise films,
+      # repeat collaborators), refreshed concurrently at Metadata.Queue's
+      # max_concurrency: 2, can deadlock each other in upsert_person/1's
+      # SELECT-then-INSERT path — transaction A inserts person X then blocks
+      # inserting Y (which B is mid-inserting), while B inserts Y then
+      # blocks inserting X (which A is mid-inserting): a lock cycle, and
+      # Postgres aborts one with `deadlock_detected`, silently swallowed by
+      # Worker.refresh_item/1's rescue. The sort_by(person id) pass below
+      # (from update_profile_path/2's Repo.update) only covers people that
+      # already exist — a brand-new person has no id to sort by until AFTER
+      # it's inserted, so it can't be the fix for this path. tmdb_id is
+      # known up front and stable regardless of credit order, so sorting by
+      # it here — before any INSERT runs — makes concurrent refreshes always
+      # attempt the same not-yet-existing people in the same order. Only
+      # entries with a tmdb_id go through the conflict-checked path; a
+      # person with none always inserts a fresh, non-competing row (see
+      # upsert_person/1) and is left out here on purpose.
+      people
+      |> Enum.filter(& &1[:tmdb_id])
+      |> Enum.sort_by(& &1[:tmdb_id])
+      |> Enum.each(&upsert_person/1)
 
       rows =
         people

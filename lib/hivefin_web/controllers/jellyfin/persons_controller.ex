@@ -9,6 +9,7 @@ defmodule HivefinWeb.Jellyfin.PersonsController do
   use HivefinWeb, :controller
 
   alias Hivefin.Jellyfin.Dto.BaseItem
+  alias Hivefin.Jellyfin.Params
   alias Hivefin.Library.PeopleContext
 
   @doc """
@@ -18,8 +19,10 @@ defmodule HivefinWeb.Jellyfin.PersonsController do
   rows in production — never attempt to return the whole table unpaged).
   """
   def index(conn, params) do
-    start_index = parse_int(params["StartIndex"] || params["startIndex"]) || 0
-    limit = parse_int(params["Limit"] || params["limit"])
+    start_index =
+      Params.clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
+
+    limit = Params.clamp_non_neg(parse_int(params["Limit"] || params["limit"]))
     search = params["SearchTerm"] || params["searchTerm"]
 
     {people, total} =
