@@ -22,6 +22,7 @@ defmodule Hivefin.Library.Item do
     has_many :children, __MODULE__, foreign_key: :parent_id
     has_many :media_sources, Hivefin.Library.MediaSource
     has_many :images, Hivefin.Library.Image
+    has_many :item_people, Hivefin.Library.ItemPerson
 
     timestamps(type: :utc_datetime_usec)
   end
