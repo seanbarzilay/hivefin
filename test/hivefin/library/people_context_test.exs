@@ -132,36 +132,46 @@ defmodule Hivefin.Library.PeopleContextTest do
     refute is_nil(db_role)
   end
 
-  test "headshot_targets pairs stored people with their profile_path by TMDb id" do
+  test "profile_path is persisted on the person row when present" do
     item = make_item("102 Dalmatians")
     assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
-
-    targets = PeopleContext.headshot_targets(item.id, people())
-    assert length(targets) == 1
-
-    [{person_id, profile_path}] = targets
-    assert profile_path == "/c.jpg"
 
     glenn = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Glenn Close"))
-    assert person_id == glenn.person.id
+    assert glenn.person.profile_path == "/c.jpg"
+
+    kevin = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Kevin Lima"))
+    assert is_nil(kevin.person.profile_path)
   end
 
-  test "headshot_targets omits people with no profile_path" do
+  test "re-ingest backfills profile_path on a person row that had none (cached-match re-apply)" do
+    item = make_item("102 Dalmatians")
+
+    # Simulates a person row from before this column existed, or from a
+    # payload where TMDb had no photo for them yet.
+    stale = [%{hd(people()) | profile_path: nil}, Enum.at(people(), 1)]
+    assert {:ok, 2} = PeopleContext.replace_for_item(item.id, stale)
+
+    glenn = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Glenn Close"))
+    assert is_nil(glenn.person.profile_path)
+
+    # Re-applying the same match — as a backfill re-running refresh against
+    # the TMDb response cache does, with no new API call — must populate the
+    # now-present profile_path on the existing row rather than leaving it nil.
+    assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
+
+    glenn = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Glenn Close"))
+    assert glenn.person.profile_path == "/c.jpg"
+  end
+
+  test "re-ingest follows TMDb when it changes a person's photo" do
     item = make_item("102 Dalmatians")
     assert {:ok, 2} = PeopleContext.replace_for_item(item.id, people())
 
-    kevin_only = [
-      %{
-        tmdb_id: 1,
-        name: "Kevin Lima",
-        role: "",
-        type: "Director",
-        sort_order: nil,
-        profile_path: nil
-      }
-    ]
+    changed = [%{hd(people()) | profile_path: "/new-photo.jpg"}, Enum.at(people(), 1)]
+    assert {:ok, 2} = PeopleContext.replace_for_item(item.id, changed)
 
-    assert PeopleContext.headshot_targets(item.id, kevin_only) == []
+    glenn = Enum.find(PeopleContext.list_for_item(item.id), &(&1.person.name == "Glenn Close"))
+    assert glenn.person.profile_path == "/new-photo.jpg"
   end
 
   test "two crew jobs collapsing to the same type and role insert without raising" do

@@ -151,7 +151,8 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
     assert Enum.map(dto["People"], & &1["Type"]) == ["Actor", "Director"]
   end
 
-  test "PrimaryImageTag also appears through the batch-preloaded list path", %{library: library} do
+  test "PrimaryImageTag also appears through the batch-preloaded list path, from profile_path alone",
+       %{library: library} do
     # people_for/1 has two clauses (preloaded item_people vs. list_for_item/1
     # fallback) sharing one person_entry/1 — this guards against a future
     # edit that duplicates that logic and only updates one clause.
@@ -177,21 +178,9 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
         }
       ])
 
-    [entry] = PeopleContext.list_for_item(item.id)
-
-    path = Path.join(System.tmp_dir!(), "hs-preload-#{entry.person.id}.jpg")
-    File.write!(path, "not-really-a-jpeg")
-    on_exit(fn -> File.rm(path) end)
-
-    {:ok, _} =
-      %Hivefin.Library.Image{}
-      |> Hivefin.Library.Image.changeset(%{
-        person_id: entry.person.id,
-        type: :primary,
-        local_path: path
-      })
-      |> Repo.insert()
-
+    # No cached Image row anywhere — the tag must still appear, since
+    # headshots are fetched lazily (on first client image request), never at
+    # metadata-refresh time.
     {entries, _total} = LibraryContext.list_items_for_parent(library.id, preload_people: true)
     loaded_item = Enum.find(entries, &(&1.id == item.id))
     assert is_list(loaded_item.item_people)
@@ -256,36 +245,139 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
     assert dto["People"] == []
   end
 
-  test "a person with a cached image gets a PrimaryImageTag", %{item: item} do
-    [entry | _] = PeopleContext.list_for_item(item.id)
-
-    path = Path.join(System.tmp_dir!(), "hs-#{entry.person.id}.jpg")
-    File.write!(path, "not-really-a-jpeg")
-
-    {:ok, _} =
-      %Hivefin.Library.Image{}
-      |> Hivefin.Library.Image.changeset(%{
-        person_id: entry.person.id,
-        type: :primary,
-        local_path: path
+  test "a person with profile_path and no cached image still gets a PrimaryImageTag (fallback path)",
+       %{library: library} do
+    {:ok, item} =
+      %Item{}
+      |> Item.changeset(%{
+        name: "Has Profile Path",
+        type: :movie,
+        sort_name: "has profile path",
+        library_id: library.id
       })
       |> Repo.insert()
 
-    dto = BaseItem.from_item(item, fields: ["People"])
-    person = Enum.find(dto["People"], &(&1["Id"] == Hivefin.Jellyfin.Id.format(entry.person.id)))
+    {:ok, _} =
+      PeopleContext.replace_for_item(item.id, [
+        %{
+          tmdb_id: 9999,
+          name: "Headshot Haver",
+          role: "Someone",
+          type: "Actor",
+          sort_order: 0,
+          profile_path: "/x.jpg"
+        }
+      ])
+
+    [entry] = PeopleContext.list_for_item(item.id)
+    assert entry.person.profile_path == "/x.jpg"
+
+    # Nothing cached at all — lazy fetch means the client sees the tag BEFORE
+    # any image request happens, or it would never request the image.
+    refute Repo.get_by(Hivefin.Library.Image, person_id: entry.person.id)
+
+    # item_people is not preloaded here — this exercises the list_for_item/1
+    # fallback clause of people_for/1, not the batch-preloaded one.
+    dto = BaseItem.from_item(Repo.reload(item), fields: ["People"])
+    [person] = dto["People"]
 
     assert person["PrimaryImageTag"]
     refute is_nil(person["PrimaryImageTag"])
-
-    File.rm(path)
   end
 
-  test "a person with no image omits PrimaryImageTag rather than sending null", %{item: item} do
+  test "a person with nil profile_path has the key absent, not null, on the wire", %{item: item} do
     dto = BaseItem.from_item(item, fields: ["People"])
 
-    for p <- dto["People"] do
-      refute Map.has_key?(p, "PrimaryImageTag") and is_nil(p["PrimaryImageTag"]),
-             "PrimaryImageTag must be absent, not null"
+    # drop_nils/1 only strips top-level keys on the base map — it does NOT
+    # recurse into "People" — so an implementation that set
+    # "PrimaryImageTag" => nil instead of omitting the key would pass a raw
+    # Map.has_key? check just as easily as a correct one. Round-tripping
+    # through the actual JSON encoder is what proves the wire shape.
+    encoded = dto["People"] |> Jason.encode!() |> Jason.decode!()
+
+    assert length(encoded) == 2
+
+    for p <- encoded do
+      refute Map.has_key?(p, "PrimaryImageTag"),
+             "PrimaryImageTag must be absent when profile_path is nil, not null"
     end
+  end
+
+  test "People never issues an images query — the tag comes from profile_path, not a lookup", %{
+    library: library
+  } do
+    {:ok, big_item} =
+      %Item{}
+      |> Item.changeset(%{
+        name: "Several People",
+        type: :movie,
+        sort_name: "several people",
+        library_id: library.id
+      })
+      |> Repo.insert()
+
+    {:ok, _} =
+      PeopleContext.replace_for_item(big_item.id, [
+        %{
+          tmdb_id: 1,
+          name: "A",
+          role: "One",
+          type: "Actor",
+          sort_order: 0,
+          profile_path: "/a.jpg"
+        },
+        %{
+          tmdb_id: 2,
+          name: "B",
+          role: "Two",
+          type: "Actor",
+          sort_order: 1,
+          profile_path: "/b.jpg"
+        },
+        %{tmdb_id: 3, name: "C", role: "Three", type: "Actor", sort_order: 2, profile_path: nil},
+        %{
+          tmdb_id: 4,
+          name: "D",
+          role: "",
+          type: "Director",
+          sort_order: nil,
+          profile_path: "/d.jpg"
+        },
+        %{tmdb_id: 5, name: "E", role: "", type: "Writer", sort_order: nil, profile_path: nil}
+      ])
+
+    test_pid = self()
+    handler_id = "no-images-query-per-person-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:hivefin, :repo, :query],
+      fn _event, _measurements, %{source: source}, _config ->
+        callers = Process.get(:"$callers") || []
+
+        if source == "images" and test_pid in [self() | callers] do
+          send(test_pid, :images_queried)
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    dto = BaseItem.from_item(Repo.reload(big_item), fields: ["People"])
+    assert length(dto["People"]) == 5
+
+    count =
+      Stream.repeatedly(fn ->
+        receive do
+          :images_queried -> 1
+        after
+          50 -> nil
+        end
+      end)
+      |> Enum.take_while(& &1)
+      |> length()
+
+    assert count == 0, "expected zero images queries for 5 people, got #{count}"
   end
 end

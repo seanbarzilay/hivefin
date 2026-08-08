@@ -12,6 +12,7 @@ defmodule Hivefin.Library.Person do
     field :name, :string
     field :sort_name, :string
     field :provider_ids, :map, default: %{}
+    field :profile_path, :string
 
     has_many :item_people, Hivefin.Library.ItemPerson
 
@@ -20,7 +21,7 @@ defmodule Hivefin.Library.Person do
 
   def changeset(person, attrs) do
     person
-    |> cast(attrs, [:name, :sort_name, :provider_ids])
+    |> cast(attrs, [:name, :sort_name, :provider_ids, :profile_path])
     |> validate_required([:name])
     |> put_sort_name()
     |> unique_constraint(:provider_ids, name: :people_tmdb_id_unique_index)

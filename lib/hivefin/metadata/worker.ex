@@ -163,40 +163,15 @@ defmodule Hivefin.Metadata.Worker do
     # failure must not roll back the item metadata we just wrote.
     # PeopleContext.replace_for_item/2 treats [] as a no-op, so a missing or
     # empty :people key here can't wipe credits an item already has.
-    people = match[:people] || []
-
-    case Hivefin.Library.PeopleContext.replace_for_item(item.id, people) do
-      {:ok, _count} when people != [] -> fetch_headshots(item.id, people)
-      _ -> :ok
-    end
+    #
+    # Headshots are NOT fetched here. At production scale (~170k people) an
+    # eager fetch-on-refresh would mean ~170k downloads for faces mostly
+    # nobody opens. profile_path is persisted on the person row by
+    # upsert_person/1; ImagesController fetches lazily, on the first request
+    # for that person's image.
+    _ = Hivefin.Library.PeopleContext.replace_for_item(item.id, match[:people] || [])
 
     result
-  end
-
-  # Best-effort headshot fetch, one person at a time: a 404, a broken
-  # profile_path, or a rate-limit rejection on one person must not skip the
-  # rest or roll back the credits replace_for_item/2 just committed. Mirrors
-  # maybe_store_images/2's per-artifact isolation below. People with no
-  # profile_path (most crew, per TMDb) never reach ImageCache at all —
-  # headshot_targets/2 already filters those out.
-  defp fetch_headshots(item_id, people) do
-    item_id
-    |> Hivefin.Library.PeopleContext.headshot_targets(people)
-    |> Enum.each(fn {person_id, profile_path} ->
-      case TMDB.image_url(profile_path, :profile) do
-        nil ->
-          :ok
-
-        url ->
-          case ImageCache.store_person(person_id, url) do
-            {:ok, _} ->
-              :ok
-
-            {:error, reason} ->
-              Logger.warning("headshot store failed: #{TMDB.redact_secrets(reason)}")
-          end
-      end
-    end)
   end
 
   defp maybe_put(map, _key, nil), do: map

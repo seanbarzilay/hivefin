@@ -67,29 +67,6 @@ defmodule Hivefin.Library.PeopleContext do
   end
 
   @doc """
-  Pairs stored people with the `profile_path` from their TMDb credit entry.
-
-  Returns `[{person_id, profile_path}]` for people who have one. Matching is by
-  TMDb id, which is also the dedup key, so this is exact.
-  """
-  def headshot_targets(item_id, people) when is_binary(item_id) and is_list(people) do
-    by_tmdb_id =
-      people
-      |> Enum.reject(&is_nil(&1[:profile_path]))
-      |> Map.new(fn p -> {to_string(p[:tmdb_id]), p[:profile_path]} end)
-
-    item_id
-    |> list_for_item()
-    |> Enum.flat_map(fn %{person: person} ->
-      case Map.fetch(by_tmdb_id, person.provider_ids["Tmdb"]) do
-        {:ok, profile_path} -> [{person.id, profile_path}]
-        :error -> []
-      end
-    end)
-    |> Enum.uniq()
-  end
-
-  @doc """
   The `item_people` query, cast-before-crew ordered with `:person` preloaded.
 
   Shared with `LibraryContext.item_preloads/1` so a batch preload across a
@@ -116,7 +93,11 @@ defmodule Hivefin.Library.PeopleContext do
     case Repo.one(person_by_tmdb_id(key)) do
       nil ->
         %Person{}
-        |> Person.changeset(%{name: attrs[:name], provider_ids: %{"Tmdb" => key}})
+        |> Person.changeset(%{
+          name: attrs[:name],
+          provider_ids: %{"Tmdb" => key},
+          profile_path: attrs[:profile_path]
+        })
         |> Repo.insert()
         |> case do
           {:ok, person} ->
@@ -131,14 +112,32 @@ defmodule Hivefin.Library.PeopleContext do
         end
 
       person ->
-        person
+        # Backfills a previously-nil profile_path and follows TMDb if it
+        # changes a photo. Every refresh re-ingests full credits, so this is
+        # also how a cached-match re-apply (no new API call) populates
+        # profile_path on rows created before this column existed.
+        update_profile_path(person, attrs[:profile_path])
     end
   end
 
   defp upsert_person(attrs) do
-    {:ok, person} = %Person{} |> Person.changeset(%{name: attrs[:name]}) |> Repo.insert()
+    {:ok, person} =
+      %Person{}
+      |> Person.changeset(%{name: attrs[:name], profile_path: attrs[:profile_path]})
+      |> Repo.insert()
+
     person
   end
+
+  defp update_profile_path(person, profile_path)
+       when is_binary(profile_path) and person.profile_path != profile_path do
+    case person |> Person.changeset(%{profile_path: profile_path}) |> Repo.update() do
+      {:ok, updated} -> updated
+      {:error, _changeset} -> person
+    end
+  end
+
+  defp update_profile_path(person, _profile_path), do: person
 
   defp person_by_tmdb_id(key) do
     from(p in Person, where: fragment("? ->> 'Tmdb' = ?", p.provider_ids, ^key))

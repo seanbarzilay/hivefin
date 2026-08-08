@@ -163,12 +163,24 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "Type" => entry.type
     }
 
-    # PrimaryImageTag is omitted, never null, when the person has no cached
-    # headshot — jellyfin-web dereferences it without a null guard.
-    case ImageCache.image_tags_for(entry.person.id) do
-      %{"Primary" => tag} -> Map.put(base, "PrimaryImageTag", tag)
-      _ -> base
+    # PrimaryImageTag is derived from profile_path itself (already loaded on
+    # the preloaded Person — zero extra queries), NOT from whether an image
+    # is actually cached yet: headshots are fetched lazily by
+    # ImagesController on first request, so gating the tag on a cached Image
+    # row would mean the client never asks for the photo in the first place.
+    # A hash keeps the tag stable across requests and lets it change if TMDb
+    # ever swaps the photo. Omitted, never null, when there's no profile_path.
+    case entry.person.profile_path do
+      path when is_binary(path) and path != "" ->
+        Map.put(base, "PrimaryImageTag", image_tag(path))
+
+      _ ->
+        base
     end
+  end
+
+  defp image_tag(path) do
+    :crypto.hash(:md5, path) |> Base.encode16(case: :lower)
   end
 
   defp load_sources(item, opts) do

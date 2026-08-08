@@ -119,14 +119,17 @@ defmodule Hivefin.Metadata.ImageCache do
   end
 
   @doc """
-  Builds Jellyfin-style ImageTags map for an item or person
-  (`%{"Primary" => tag, ...}`). Tag is the image row id (stable cache buster).
+  Builds Jellyfin-style ImageTags map for an item (`%{"Primary" => tag, ...}`).
+  Tag is the image row id (stable cache buster).
 
   Uses preloaded `images` when present; queries by id only when given a bare
-  id. A bare id may be an item id or a person id — mirrors `path_for/2`,
-  matching on `item_id` or `person_id` since `images_one_owner` guarantees a
-  row owns exactly one of them. Unloaded associations yield `%{}` (callers
-  that need tags should preload).
+  item id. Unloaded associations yield `%{}` (callers that need tags should
+  preload).
+
+  Person headshot tags do NOT go through this function — BaseItem derives
+  `PrimaryImageTag` for a person straight from `Person.profile_path` (a hash
+  of it), never from a per-person `images` query. See
+  `Hivefin.Jellyfin.Dto.BaseItem.person_entry/1`.
   """
   def image_tags_for(%{images: images}) when is_list(images) do
     tags_from_images(images)
@@ -134,9 +137,9 @@ defmodule Hivefin.Metadata.ImageCache do
 
   def image_tags_for(%{images: %Ecto.Association.NotLoaded{}}), do: %{}
 
-  def image_tags_for(id) when is_binary(id) do
+  def image_tags_for(item_id) when is_binary(item_id) do
     images =
-      from(i in Image, where: i.item_id == ^id or i.person_id == ^id)
+      from(i in Image, where: i.item_id == ^item_id)
       |> Repo.all()
 
     tags_from_images(images)
@@ -217,7 +220,18 @@ defmodule Hivefin.Metadata.ImageCache do
     |> Repo.update()
   end
 
+  # Shared by store/3 (eager poster/backdrop) and store_person/2 (lazy
+  # on-demand headshot fetch from ImagesController). The rate limiter throttle
+  # matters most for the latter: opening one big cast page can trigger dozens
+  # of concurrent headshot fetches at once.
   defp download(url) do
+    case Hivefin.Metadata.RateLimiter.checkout() do
+      :ok -> do_download(url)
+      :error -> {:error, :rate_limited}
+    end
+  end
+
+  defp do_download(url) do
     case Hivefin.Http.get_body(url,
            decode_json: false,
            req_options: req_options()
