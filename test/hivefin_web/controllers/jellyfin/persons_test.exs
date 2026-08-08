@@ -295,6 +295,64 @@ defmodule HivefinWeb.Jellyfin.PersonsTest do
     assert body["TotalRecordCount"] == 0
   end
 
+  test "SearchTerm matches % and _ literally instead of as LIKE wildcards", %{
+    conn: conn,
+    item: item,
+    tmdb_base: tmdb_base
+  } do
+    {:ok, _} =
+      PeopleContext.replace_for_item(item.id, [
+        %{
+          tmdb_id: tmdb_base + 4,
+          name: "100% Wolf",
+          role: "",
+          type: "Director",
+          sort_order: nil,
+          profile_path: nil
+        },
+        %{
+          tmdb_id: tmdb_base + 5,
+          name: "Snake_Eyes",
+          role: "",
+          type: "Director",
+          sort_order: nil,
+          profile_path: nil
+        }
+      ])
+
+    percent = json_response(get(conn, "/Persons?SearchTerm=%25"), 200)
+    assert Enum.map(percent["Items"], & &1["Name"]) == ["100% Wolf"]
+
+    underscore = json_response(get(conn, "/Persons?SearchTerm=_"), 200)
+    assert Enum.map(underscore["Items"], & &1["Name"]) == ["Snake_Eyes"]
+  end
+
+  test "GET /Persons caps an explicit oversized Limit", %{conn: conn} do
+    # 162,800 rows in production: an unbounded Limit serializes the table.
+    now = DateTime.utc_now()
+
+    rows =
+      for i <- 1..1001 do
+        name = "Cap Test #{i}"
+
+        %{
+          id: Ecto.UUID.generate(),
+          name: name,
+          sort_name: String.downcase(name),
+          provider_ids: %{},
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    {1001, _} = Repo.insert_all(Person, rows)
+
+    body = json_response(get(conn, "/Persons?Limit=200000"), 200)
+
+    assert length(body["Items"]) == 1000
+    assert body["TotalRecordCount"] == 1003
+  end
+
   # Exactly how the client gets a person id: off a DTO, dashless, never
   # constructed test-side.
   defp person_id_from_listing(conn, name) do

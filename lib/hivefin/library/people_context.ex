@@ -15,9 +15,17 @@ defmodule Hivefin.Library.PeopleContext do
   # /Items) and the table is 162,800+ rows in production — an unpaged request
   # must not try to serialize the whole thing. ItemsController.latest/2 sets
   # the same kind of precedent (defaults Limit to 16 when absent) for the same
-  # reason. Only applied when the caller omits :limit entirely; an explicit
-  # Limit (even a huge one) is the client's call, same as ItemsController.
+  # reason. Only applied when the caller omits :limit entirely.
   @default_list_limit 100
+
+  # An explicit Limit is NOT the client's call here, unlike ItemsController:
+  # that endpoint's biggest table is 7,278 items, so `Limit=200000` costs a
+  # full scan of something small. `people` is 162,800 rows and growing with
+  # every metadata refresh, so the same request serializes ~163k DTOs into
+  # one response. No jellyfin client asks for more than a screenful (the
+  # Favorites row sends Limit=20, list.html pages by 100), so the cap is well
+  # clear of any real request while bounding the worst one.
+  @max_list_limit 1000
 
   @doc """
   A page of people plus the total count, ordered by sort_name (id as a
@@ -26,16 +34,19 @@ defmodule Hivefin.Library.PeopleContext do
   `opts`:
   - `:start_index` — offset, defaults to 0. Negative values are clamped to 0
     (Postgres raises on a negative OFFSET rather than tolerating one).
-  - `:limit` — page size; defaults to #{@default_list_limit} when omitted
-    (never omitted from the query — see the moduledoc note on production
-    scale). Negative values are clamped to 0 for the same reason (Postgres
-    raises on a negative LIMIT); an explicit non-negative value, however
-    large, is passed through as-is — the client's call, same as `:limit`.
-  - `:search_term` — case-insensitive substring match against sort_name
+  - `:limit` — page size; defaults to #{@default_list_limit} when omitted and
+    is capped at #{@max_list_limit} however large the caller asks for (never
+    omitted from the query — see the note above on production scale).
+    Negative values are clamped to 0 (Postgres raises on a negative LIMIT).
+  - `:search_term` — case-insensitive substring match against sort_name.
+    `%` and `_` are matched literally, not as LIKE wildcards.
   """
   def list_people(opts \\ []) do
     start_index = Params.clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
-    limit = Params.clamp_non_neg(Keyword.get(opts, :limit)) || @default_list_limit
+
+    limit =
+      min(Params.clamp_non_neg(Keyword.get(opts, :limit)) || @default_list_limit, @max_list_limit)
+
     search = Keyword.get(opts, :search_term)
 
     # sort_name alone is not enough at 162,800 rows: common-surname
@@ -53,7 +64,7 @@ defmodule Hivefin.Library.PeopleContext do
       from(p in Person, order_by: [asc: p.sort_name, asc: p.id])
       |> then(fn q ->
         if is_binary(search) and search != "" do
-          pattern = "%#{String.downcase(search)}%"
+          pattern = "%#{escape_like(String.downcase(search))}%"
           from(p in q, where: like(p.sort_name, ^pattern))
         else
           q
@@ -70,6 +81,13 @@ defmodule Hivefin.Library.PeopleContext do
 
     {page, total}
   end
+
+  # `%` and `_` in a SearchTerm are characters the user typed, not wildcards —
+  # unescaped, `SearchTerm=%` matches all 162,800 rows and `SearchTerm=_`
+  # matches every name. Postgres's LIKE uses `\` as its escape character by
+  # default, so no ESCAPE clause is needed; the pattern travels as a bound
+  # parameter, so SQL string-literal escaping never enters into it.
+  defp escape_like(term), do: String.replace(term, ["\\", "%", "_"], &("\\" <> &1))
 
   @doc """
   Looks a person up by id, accepting the dashless form clients are handed.
