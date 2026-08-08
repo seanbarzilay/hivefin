@@ -22,7 +22,7 @@ defmodule Hivefin.Repo.Migrations.CreatePeople do
       add :id, :binary_id, primary_key: true
       add :item_id, references(:items, type: :binary_id, on_delete: :delete_all), null: false
       add :person_id, references(:people, type: :binary_id, on_delete: :delete_all), null: false
-      add :role, :text
+      add :role, :text, null: false, default: ""
       add :type, :string, null: false
       add :sort_order, :integer
 
