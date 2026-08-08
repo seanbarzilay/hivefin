@@ -87,6 +87,13 @@ defmodule Hivefin.Jellyfin.Dto.Session do
       "ServerId" => Hivefin.Jellyfin.Id.format(Hivefin.Jellyfin.SystemInfo.server_id()),
       "PlayableMediaTypes" => ["Video"],
       "SupportedCommands" => commands,
+      # Optional in the SDK, but jellyfin-web's dashboard reads
+      # `session.AdditionalUsers.length` with NO guard (getUsersHtml in the
+      # dashboard chunk), so omitting it throws while rendering every session
+      # card and leaves "Active Devices" empty. Same trap as PlayState below:
+      # "optional per the SDK" does not mean "safe to omit for JS clients".
+      # We have no multi-user sessions, so this is always empty.
+      "AdditionalUsers" => [],
       "Capabilities" => %{
         "PlayableMediaTypes" => ["Video"],
         "SupportedCommands" => commands,

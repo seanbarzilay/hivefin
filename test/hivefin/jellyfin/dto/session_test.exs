@@ -218,6 +218,23 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
              ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
   end
 
+  # jellyfin-web's dashboard does `session.AdditionalUsers.length` with no guard
+  # (getUsersHtml), so an absent value throws while rendering every session card
+  # and the "Active Devices" panel comes up empty. Must be present, and a list.
+  test "always emits AdditionalUsers as a list, controllable or not", %{access_token: at} do
+    for opts <- [
+          [],
+          [controllable: true],
+          [state: %{item_id: nil, position_ticks: 1, is_paused: false}]
+        ] do
+      dto = SessionDto.from_access_token(at, opts)
+      assert Map.has_key?(dto, "AdditionalUsers"), "missing AdditionalUsers for #{inspect(opts)}"
+
+      assert is_list(dto["AdditionalUsers"]),
+             "AdditionalUsers must be a list, got #{inspect(dto["AdditionalUsers"])}"
+    end
+  end
+
   test "a session with no live socket is not controllable", %{access_token: at} do
     dto = SessionDto.from_access_token(at)
 
