@@ -125,6 +125,30 @@ defmodule Hivefin.Metadata.ImageCacheTest do
     assert File.read!(path) == "already-cached-bytes"
   end
 
+  test "store_person marks a confirmed failure and never retries it", %{cache_dir: dir} do
+    {:ok, person} =
+      %Hivefin.Library.Person{}
+      |> Hivefin.Library.Person.changeset(%{name: "Nobody's Seen This Photo"})
+      |> Repo.insert()
+
+    Req.Test.stub(TMDB, fn conn ->
+      conn |> Plug.Conn.put_status(404) |> Plug.Conn.send_resp(404, "")
+    end)
+
+    url = "https://image.tmdb.org/t/p/w185/gone.jpg"
+    assert {:error, {:http_error, 404}} = ImageCache.store_person(person.id, url)
+
+    # Persisted as a "don't retry" marker: local_path nil, not a missing row.
+    image = Repo.get_by(Image, person_id: person.id, type: :primary)
+    assert image
+    assert is_nil(image.local_path)
+    refute File.exists?(Path.join([dir, person.id]))
+
+    # No second Req.Test.stub configured: a stub with no match clause raises
+    # if this attempts a second HTTP call — it must not.
+    assert {:error, :no_photo} = ImageCache.store_person(person.id, url)
+  end
+
   test "store re-downloads when the cached row's file is missing from disk", %{
     item: item,
     cache_dir: dir

@@ -50,15 +50,30 @@ defmodule Hivefin.Metadata.ImageCache do
 
   Skips the download the same way `store/3` does: an existing `Image` row
   for `person_id` with a file still on disk is reused rather than
-  re-fetched on every metadata refresh.
+  re-fetched. `ImagesController` is the only caller — a person's headshot is
+  fetched lazily, on the first client request for it, never at metadata
+  refresh time.
 
-  Returns `{:ok, absolute_path}` or `{:error, reason}`.
+  A failed fetch (TMDb 404, timeout, `:rate_limited`, …) persists an `Image`
+  row with `local_path: nil` as a "don't retry" marker: this endpoint is
+  unauthenticated, so without it a permanently-missing photo would be
+  re-attempted, and re-burn a shared `RateLimiter` token, on every view by
+  every anonymous caller, forever. `PeopleContext.update_profile_path/2`
+  deletes this marker (and any real cached file) the moment a legitimate
+  metadata refresh actually changes `profile_path` — that's what lets a
+  since-fixed or since-changed photo be fetched again.
+
+  Returns `{:ok, absolute_path}` or `{:error, reason}`. `{:error, :no_photo}`
+  specifically means "already tried, marked as failed, not retrying."
   """
   @spec store_person(Ecto.UUID.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def store_person(person_id, url) when is_binary(person_id) and is_binary(url) do
     case cached_person_path(person_id) do
       {:ok, path} ->
         {:ok, path}
+
+      :failed ->
+        {:error, :no_photo}
 
       :miss ->
         with :ok <- ensure_cache_dir(),
@@ -68,6 +83,10 @@ defmodule Hivefin.Metadata.ImageCache do
              :ok <- write_file(path, body),
              {:ok, _image} <- upsert_person_image(person_id, path) do
           {:ok, path}
+        else
+          {:error, reason} ->
+            _ = mark_person_headshot_failed(person_id)
+            {:error, reason}
         end
     end
   end
@@ -79,7 +98,16 @@ defmodule Hivefin.Metadata.ImageCache do
   end
 
   defp cached_person_path(person_id) do
-    path_from_image(get_person_image(person_id, :primary))
+    case get_person_image(person_id, :primary) do
+      nil -> :miss
+      %Image{local_path: nil} -> :failed
+      image -> path_from_image(image)
+    end
+  end
+
+  defp mark_person_headshot_failed(person_id) do
+    _ = upsert_person_image(person_id, nil)
+    :ok
   end
 
   defp path_from_image(%Image{local_path: path}) when is_binary(path) do
