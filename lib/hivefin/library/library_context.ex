@@ -152,6 +152,7 @@ defmodule Hivefin.Library.LibraryContext do
     ProductionYear, PremiereDate, DateCreated (comma-separated; first supported field wins).
     When omitted and parent is a series or season, defaults to IndexNumber.
   - `:preload_media_sources` — preload sources + streams (default false)
+  - `:preload_people` — preload cast/crew, ordered cast-before-crew (default false)
 
   Returns `{entries, total_count}` where entries are `%Library{}` or `%Item{}`.
   """
@@ -163,6 +164,7 @@ defmodule Hivefin.Library.LibraryContext do
     start_index = clamp_non_neg(Keyword.get(opts, :start_index, 0)) || 0
     sort_raw = Keyword.get(opts, :sort_by)
     preload_sources? = Keyword.get(opts, :preload_media_sources, false)
+    preload_people? = Keyword.get(opts, :preload_people, false)
 
     cond do
       is_nil(parent_id) and libraries_as_root?(include_types, recursive?) ->
@@ -179,7 +181,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> maybe_filter_types(include_types)
           |> apply_item_sort(sort_by)
 
-        page_items(query, start_index, limit, preload_sources?)
+        page_items(query, start_index, limit, preload_sources?, preload_people?)
 
       library = get_library(parent_id) ->
         sort_by = normalize_sort_by(sort_raw)
@@ -191,7 +193,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> maybe_filter_types(include_types)
           |> apply_item_sort(sort_by)
 
-        page_items(query, start_index, limit, preload_sources?)
+        page_items(query, start_index, limit, preload_sources?, preload_people?)
 
       item = get_item(parent_id) ->
         sort_by = child_sort_for_parent(item, sort_raw)
@@ -203,7 +205,7 @@ defmodule Hivefin.Library.LibraryContext do
           |> maybe_filter_types(include_types)
           |> apply_item_sort(sort_by)
 
-        page_items(query, start_index, limit, preload_sources?)
+        page_items(query, start_index, limit, preload_sources?, preload_people?)
 
       true ->
         {[], 0}
@@ -294,6 +296,7 @@ defmodule Hivefin.Library.LibraryContext do
     sort_raw = Keyword.get(opts, :sort_by)
     sort_by = if blank_sort?(sort_raw), do: :index_number, else: normalize_sort_by(sort_raw)
     preload_sources? = Keyword.get(opts, :preload_media_sources, false)
+    preload_people? = Keyword.get(opts, :preload_people, false)
 
     season_ids =
       Item
@@ -307,7 +310,7 @@ defmodule Hivefin.Library.LibraryContext do
       |> apply_item_sort(sort_by)
 
     # Empty IN list is fine in Ecto (returns no rows)
-    page_items(query, start_index, limit, preload_sources?)
+    page_items(query, start_index, limit, preload_sources?, preload_people?)
   end
 
   def list_episodes_for_series(_, _opts), do: {[], 0}
@@ -885,9 +888,9 @@ defmodule Hivefin.Library.LibraryContext do
     where(query, [i], i.parent_id == ^parent_id)
   end
 
-  defp page_items(query, start_index, limit, preload_sources?) do
+  defp page_items(query, start_index, limit, preload_sources?, preload_people?) do
     total = Repo.aggregate(query, :count, :id)
-    preloads = item_preloads(preload_sources?)
+    preloads = item_preloads(preload_sources?, preload_people?)
 
     query =
       query
@@ -903,19 +906,25 @@ defmodule Hivefin.Library.LibraryContext do
   defp maybe_limit(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
   defp maybe_limit(query, _), do: query
 
-  # item_people preloaded unconditionally, same as :images — a fixed 2-query
-  # cost for the whole page (item_people, then its :person preload), not
-  # per-item. BaseItem.people_for/1 still only emits it when Fields=People.
-  defp item_preloads(true),
-    do: [
-      :parent,
-      :images,
-      item_people: PeopleContext.ordered_item_people_query(),
-      media_sources: :media_streams
-    ]
+  # :images is unconditional because ImageTags is emitted on every item.
+  # item_people and media_sources are each Fields-gated on the wire
+  # (BaseItem.people_for/1, maybe_put_media_sources/4's non-playable branch)
+  # so their preloads are opt-in here too — at 7k+ items in a library,
+  # preloading item_people unconditionally means materializing and discarding
+  # every ItemPerson+Person row on every plain listing.
+  defp item_preloads(preload_sources?, preload_people?) do
+    [:parent, :images]
+    |> add_people_preload(preload_people?)
+    |> add_media_sources_preload(preload_sources?)
+  end
 
-  defp item_preloads(_),
-    do: [:parent, :images, item_people: PeopleContext.ordered_item_people_query()]
+  defp add_people_preload(preloads, true),
+    do: preloads ++ [item_people: PeopleContext.ordered_item_people_query()]
+
+  defp add_people_preload(preloads, _), do: preloads
+
+  defp add_media_sources_preload(preloads, true), do: preloads ++ [media_sources: :media_streams]
+  defp add_media_sources_preload(preloads, _), do: preloads
 
   defp paginate(list, start_index, nil) when start_index <= 0, do: list
 

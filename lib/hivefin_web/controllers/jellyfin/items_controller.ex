@@ -38,7 +38,6 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
         preload_media_sources: true
       )
 
-
     user_data_map = user_data_map_for(conn, entries)
 
     items =
@@ -62,7 +61,6 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     user_id = conn.assigns.current_user.id
     resume(conn, Map.put(params, "user_id", user_id))
   end
-
 
   def index(conn, params) do
     opts =
@@ -124,7 +122,6 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
         end
     end
   end
-
 
   @doc """
   `GET /Users/:user_id/Items/Resume` — in-progress items for continue watching.
@@ -280,7 +277,8 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
       start_index: clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0,
       sort_by: params["SortBy"] || params["sortBy"],
       fields: fields,
-      preload_media_sources: "MediaSources" in fields
+      preload_media_sources: "MediaSources" in fields,
+      preload_people: "People" in fields
     ]
   end
 
@@ -341,7 +339,6 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(v), do: v
 
-
   defp authorized_user?(conn, user_id) do
     case conn.assigns[:current_user] do
       %{id: id} ->
@@ -352,4 +349,3 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
     end
   end
 end
-

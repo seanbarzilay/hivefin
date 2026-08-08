@@ -135,8 +135,11 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
       ])
 
     # The library already holds the setup item too, so fetch the whole page
-    # and pick this test's item out of it.
-    {entries, _total} = LibraryContext.list_items_for_parent(library.id)
+    # and pick this test's item out of it. preload_people: true is what the
+    # controller sets when the request has Fields=People.
+    {entries, _total} =
+      LibraryContext.list_items_for_parent(library.id, preload_people: true)
+
     loaded_item = Enum.find(entries, &(&1.id == item.id))
 
     # Confirms this test actually exercises the preload path, not a fallback
@@ -146,6 +149,39 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
     dto = BaseItem.from_item(loaded_item, fields: ["People"])
 
     assert Enum.map(dto["People"], & &1["Type"]) == ["Actor", "Director"]
+  end
+
+  test "a listing without Fields=People never queries item_people", %{library: library} do
+    # item_people is Fields-gated for a reason: at this server's real scale
+    # (7k+ movies), preloading it unconditionally means materializing and
+    # discarding every ItemPerson+Person row on every plain listing.
+    test_pid = self()
+    handler_id = "no-people-preload-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:hivefin, :repo, :query],
+      fn _event, _measurements, %{source: source}, _config ->
+        # Guard against cross-test noise (this file runs async): Ecto's
+        # preloader runs each top-level association's query in its own
+        # Task, so the event fires from a different pid than this test's,
+        # not this test process itself. Task/Task.Supervisor tag spawned
+        # processes with "$callers" precisely for tracing this back —
+        # check that instead of self().
+        callers = Process.get(:"$callers") || []
+
+        if source == "item_people" and test_pid in [self() | callers] do
+          send(test_pid, :item_people_queried)
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    {_entries, _total} = LibraryContext.list_items_for_parent(library.id)
+
+    refute_received :item_people_queried
   end
 
   test "an item with no people emits an empty list, not a missing key", %{library: library} do
