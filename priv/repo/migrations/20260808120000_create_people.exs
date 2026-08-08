@@ -36,7 +36,9 @@ defmodule Hivefin.Repo.Migrations.CreatePeople do
              name: :item_people_unique_index
            )
 
-    create index(:item_people, [:item_id])
+    # No standalone index(:item_people, [:item_id]) — item_people_unique_index
+    # above already leads with item_id, so a second single-column index on it
+    # is redundant (~10 MB of dead index at the projected 340k rows).
     create index(:item_people, [:person_id])
   end
 end
