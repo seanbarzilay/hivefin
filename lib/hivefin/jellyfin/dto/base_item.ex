@@ -127,24 +127,42 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
     end
   end
 
+  # Mirrors ImageCache.image_tags_for/1: consume a batch-preloaded
+  # association when the caller (list_items_for_parent/2 et al) already
+  # loaded it, so a page of N items costs a fixed 2 queries total instead of
+  # 2N. LibraryContext.item_preloads/1 preloads via
+  # PeopleContext.ordered_item_people_query/0 — the *same* query
+  # list_for_item/1 uses below — so cast-before-crew ordering survives the
+  # preload path too.
+  defp people_for(%Item{item_people: item_people}) when is_list(item_people) do
+    Enum.map(item_people, &person_entry/1)
+  end
+
+  # Detail-page callers (get_item/1, get_item_with_sources/1) don't preload
+  # item_people — fall back to the single-item query for those.
   defp people_for(%Item{id: id}) when is_binary(id) do
     id
     |> Hivefin.Library.PeopleContext.list_for_item()
-    |> Enum.map(fn entry ->
-      # All four emitted unconditionally. Only Id is required by
-      # jellyfin-sdk-kotlin, but jellyfin-web dereferences optional fields with
-      # no guard — the same trap that produced the PlayState and AdditionalUsers
-      # crashes.
-      %{
-        "Id" => Id.format(entry.person.id),
-        "Name" => entry.person.name,
-        "Role" => entry.role || "",
-        "Type" => entry.type
-      }
-    end)
+    |> Enum.map(&person_entry/1)
   end
 
   defp people_for(_), do: []
+
+  # Works for both the preloaded %ItemPerson{person: %Person{}} struct and
+  # the %{person: %Person{}, ...} map list_for_item/1 returns — same field
+  # access either way.
+  defp person_entry(entry) do
+    # All four emitted unconditionally. Only Id is required by
+    # jellyfin-sdk-kotlin, but jellyfin-web dereferences optional fields with
+    # no guard — the same trap that produced the PlayState and AdditionalUsers
+    # crashes.
+    %{
+      "Id" => Id.format(entry.person.id),
+      "Name" => entry.person.name,
+      "Role" => entry.role || "",
+      "Type" => entry.type
+    }
+  end
 
   defp load_sources(item, opts) do
     sources =

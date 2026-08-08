@@ -60,8 +60,21 @@ defmodule Hivefin.Library.PeopleContext do
   loaded `Person`.
   """
   def list_for_item(item_id) when is_binary(item_id) do
+    ordered_item_people_query()
+    |> where([ip], ip.item_id == ^item_id)
+    |> Repo.all()
+    |> Enum.map(&%{person: &1.person, role: &1.role, type: &1.type, sort_order: &1.sort_order})
+  end
+
+  @doc """
+  The `item_people` query, cast-before-crew ordered with `:person` preloaded.
+
+  Shared with `LibraryContext.item_preloads/1` so a batch preload across a
+  list page of items sorts identically to a single-item `list_for_item/1`
+  call — the ordering lives in exactly one place, never duplicated.
+  """
+  def ordered_item_people_query do
     from(ip in ItemPerson,
-      where: ip.item_id == ^item_id,
       # Cast first: "Actor" rows carry a sort_order, crew rows do not.
       order_by: [
         asc: fragment("case when ? = 'Actor' then 0 else 1 end", ip.type),
@@ -70,8 +83,6 @@ defmodule Hivefin.Library.PeopleContext do
       ],
       preload: [:person]
     )
-    |> Repo.all()
-    |> Enum.map(&%{person: &1.person, role: &1.role, type: &1.type, sort_order: &1.sort_order})
   end
 
   # Dedup on the TMDb id. A person with no TMDb id gets a fresh row, since we

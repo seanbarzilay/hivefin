@@ -9,10 +9,9 @@ defmodule Hivefin.Library.LibraryContext do
 
   alias Hivefin.Jellyfin.Id
   alias Hivefin.Repo
-  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, ScanJob}
+  alias Hivefin.Library.{Item, Library, MediaSource, MediaStream, PeopleContext, ScanJob}
   alias Hivefin.MediaInfo.Prober
   alias Hivefin.Scanner.PathRules
-
 
   @doc """
   Creates a library.
@@ -119,7 +118,6 @@ defmodule Hivefin.Library.LibraryContext do
     end
   end
 
-
   @doc """
   Lists items in a library.
 
@@ -212,7 +210,6 @@ defmodule Hivefin.Library.LibraryContext do
     end
   end
 
-
   def get_item(id) do
     id = Id.coerce(id)
 
@@ -282,8 +279,6 @@ defmodule Hivefin.Library.LibraryContext do
 
   defp get_item_maybe_sources(id, true), do: get_item_with_sources(id)
   defp get_item_maybe_sources(id, false), do: get_item(id)
-
-
 
   @doc """
   Lists episodes belonging to a series (via season parents).
@@ -370,7 +365,6 @@ defmodule Hivefin.Library.LibraryContext do
         resolve_media_path(item_id, source_id)
     end
   end
-
 
   def media_path_for_item(_, _), do: {:error, :forbidden}
 
@@ -909,8 +903,19 @@ defmodule Hivefin.Library.LibraryContext do
   defp maybe_limit(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
   defp maybe_limit(query, _), do: query
 
-  defp item_preloads(true), do: [:parent, :images, media_sources: :media_streams]
-  defp item_preloads(_), do: [:parent, :images]
+  # item_people preloaded unconditionally, same as :images — a fixed 2-query
+  # cost for the whole page (item_people, then its :person preload), not
+  # per-item. BaseItem.people_for/1 still only emits it when Fields=People.
+  defp item_preloads(true),
+    do: [
+      :parent,
+      :images,
+      item_people: PeopleContext.ordered_item_people_query(),
+      media_sources: :media_streams
+    ]
+
+  defp item_preloads(_),
+    do: [:parent, :images, item_people: PeopleContext.ordered_item_people_query()]
 
   defp paginate(list, start_index, nil) when start_index <= 0, do: list
 

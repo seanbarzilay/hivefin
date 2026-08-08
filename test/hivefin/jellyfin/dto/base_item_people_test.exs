@@ -98,6 +98,56 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemPeopleTest do
     assert Enum.map(dto["People"], & &1["Type"]) == ["Actor", "Director"]
   end
 
+  test "cast sorts before crew through the batch-preloaded list path", %{library: library} do
+    {:ok, item} =
+      %Item{}
+      |> Item.changeset(%{
+        name: "Preload Order",
+        type: :movie,
+        sort_name: "preload order",
+        library_id: library.id
+      })
+      |> Repo.insert()
+
+    # Crew inserted first, cast second: without an explicit order_by on the
+    # preload query, Postgres has no reason to reorder rows and would likely
+    # hand them back in this (crew-first) physical order — the opposite of
+    # what's asserted below. Only LibraryContext.item_preloads/1 applying
+    # PeopleContext.ordered_item_people_query/0 makes cast come first here.
+    {:ok, _} =
+      PeopleContext.replace_for_item(item.id, [
+        %{
+          tmdb_id: 1,
+          name: "Kevin Lima",
+          role: "",
+          type: "Director",
+          sort_order: nil,
+          profile_path: nil
+        },
+        %{
+          tmdb_id: 3084,
+          name: "Glenn Close",
+          role: "Cruella De Vil",
+          type: "Actor",
+          sort_order: 0,
+          profile_path: nil
+        }
+      ])
+
+    # The library already holds the setup item too, so fetch the whole page
+    # and pick this test's item out of it.
+    {entries, _total} = LibraryContext.list_items_for_parent(library.id)
+    loaded_item = Enum.find(entries, &(&1.id == item.id))
+
+    # Confirms this test actually exercises the preload path, not a fallback
+    # query — item_people must be a loaded list, not %NotLoaded{}.
+    assert is_list(loaded_item.item_people)
+
+    dto = BaseItem.from_item(loaded_item, fields: ["People"])
+
+    assert Enum.map(dto["People"], & &1["Type"]) == ["Actor", "Director"]
+  end
+
   test "an item with no people emits an empty list, not a missing key", %{library: library} do
     # PeopleContext.replace_for_item/2 treats `[]` as a no-op that leaves
     # existing rows untouched (a pre-credits refresh must never wipe good
