@@ -170,8 +170,9 @@ defmodule HivefinWeb.Jellyfin.SessionsControllerTest do
     # Not just "agree" — a live socket must actually be reported controllable.
     assert rest_session["SupportsMediaControl"] == true
     assert rest_session["SupportsRemoteControl"] == true
-    # [] on purpose — no command-delivery endpoint exists yet (Task 9).
-    assert rest_session["SupportedCommands"] == []
+    # Task 9 delivers commands now — no longer [].
+    assert rest_session["SupportedCommands"] ==
+             Hivefin.Jellyfin.Dto.Session.supported_commands()
   end
 
   test "a user with no live socket gets an empty list, not a crash", %{conn: conn} do

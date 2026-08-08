@@ -6,9 +6,15 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   use HivefinWeb, :controller
 
   alias Hivefin.Jellyfin.Dto.Session, as: SessionDto
+  alias Hivefin.Jellyfin.Id
   alias Hivefin.Jellyfin.WsCommand
   alias Hivefin.Library.{LibraryContext, UserData}
   alias Hivefin.Sessions
+
+  # Query params JellyfinAuth reads a token from (see resolve_token/1) — never
+  # forward these into a GeneralCommand's Arguments, or the caller's own
+  # credential rides along to the target device.
+  @credential_params ~w(api_key ApiKey apiKey)
 
   # Jellyfin-compatible: past this fraction of runtime, treat as finished
   # (clears resume / shows watched). Vue only sends PositionTicks, never Played.
@@ -147,7 +153,7 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
     user = conn.assigns.current_user
 
     params
-    |> Map.drop(["session_id"])
+    |> play_data()
     |> then(&WsCommand.play(user.id, &1))
     |> deliver(conn, session_id)
   end
@@ -157,7 +163,7 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   """
   def playstate(conn, %{"session_id" => session_id, "command" => command} = params) do
     params
-    |> Map.drop(["session_id", "command"])
+    |> playstate_data()
     |> then(&WsCommand.playstate(command, &1))
     |> deliver(conn, session_id)
   end
@@ -167,9 +173,10 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
   """
   def command(conn, %{"session_id" => session_id, "command" => command} = params) do
     user = conn.assigns.current_user
+    arguments = Map.drop(params, ["session_id", "command"] ++ @credential_params)
 
     command
-    |> WsCommand.general(user.id, Map.drop(params, ["session_id", "command"]))
+    |> WsCommand.general(user.id, arguments)
     |> deliver(conn, session_id)
   end
 
@@ -185,24 +192,78 @@ defmodule HivefinWeb.Jellyfin.SessionsController do
     |> deliver(conn, session_id)
   end
 
-  # No live socket for session_id is today's only capability signal (a live
-  # socket now reports SupportsMediaControl/SupportsRemoteControl: true, see
-  # Dto.Session.from_access_token/2's :controllable option) — so gate here by
-  # attempting the push, not by a separate controllable? lookup that would
-  # just re-derive the same fact from the registry.
+  # Real clients send these as query-string params, so every value arrives as
+  # a string (and possibly under a camelCase key, like the rest of this
+  # file's params["ItemId"] || params["itemId"] handling). Built from an
+  # explicit allowlist with coercion, not Map.drop(["session_id"]) over
+  # everything else — Map.drop let through wrong-typed known keys (kotlinx
+  # serialization discards the whole message on a type mismatch, same as a
+  # missing required key) and any other query param the caller happened to
+  # send, credentials included.
+  defp play_data(params) do
+    %{}
+    |> maybe_put("PlayCommand", params["PlayCommand"] || params["playCommand"])
+    |> maybe_put("ItemIds", item_ids(params["ItemIds"] || params["itemIds"]))
+    |> maybe_put(
+      "StartPositionTicks",
+      parse_int(params["StartPositionTicks"] || params["startPositionTicks"])
+    )
+  end
+
+  defp playstate_data(params) do
+    maybe_put(
+      %{},
+      "SeekPositionTicks",
+      parse_int(params["SeekPositionTicks"] || params["seekPositionTicks"])
+    )
+  end
+
+  # `PlayRequest.itemIds` is `List<UUID>` client-side; a real client sends it
+  # as a comma-separated query string, not a JSON array.
+  defp item_ids(nil), do: nil
+  defp item_ids(ids) when is_list(ids), do: Enum.map(ids, &to_string/1)
+  defp item_ids(ids) when is_binary(ids), do: String.split(ids, ",", trim: true)
+  defp item_ids(_), do: nil
+
   defp deliver({:error, :invalid_command}, conn, _session_id) do
     conn |> put_status(:bad_request) |> json(%{"error" => "invalid_command"})
   end
 
   defp deliver(message, conn, session_id) when is_map(message) do
-    case Sessions.push(session_id, message) do
-      :ok ->
-        send_resp(conn, :no_content, "")
+    # session_id round-trips through Id.coerce/1 because the id clients are
+    # ever given (GET /Sessions "Id", the Sessions socket push) is the
+    # dashless wire form, but the session registry key is the raw dashed
+    # access-token id — pushing the dashless form as-is always misses.
+    #
+    # own_session?/2 scopes delivery to the caller's own sessions (a real
+    # client only ever advertises its own devices via GET /Sessions, but
+    # nothing else enforced that here) — 404, not 403, so a wrong target
+    # doesn't confirm another user's session exists.
+    #
+    # No live socket for session_id is today's only capability signal (a live
+    # socket now reports SupportsMediaControl/SupportsRemoteControl: true,
+    # see Dto.Session.from_access_token/2's :controllable option) — so gate
+    # by attempting the push, not by a separate controllable? lookup that
+    # would just re-derive the same fact from the registry.
+    session_id = Id.coerce(session_id)
 
-      {:error, :no_session} ->
-        conn |> put_status(:not_found) |> json(%{"error" => "no_session"})
+    if own_session?(session_id, conn.assigns.current_user.id) do
+      case Sessions.push(session_id, message) do
+        :ok -> send_resp(conn, :no_content, "")
+        {:error, :no_session} -> no_session(conn)
+      end
+    else
+      no_session(conn)
     end
   end
+
+  defp own_session?(session_id, user_id) do
+    session_id
+    |> Sessions.attrs()
+    |> Enum.any?(&(Map.get(&1, :user_id) == user_id))
+  end
+
+  defp no_session(conn), do: conn |> put_status(:not_found) |> json(%{"error" => "no_session"})
 
   # Records now-playing state on the caller's own session so other clients can
   # see it. put_state/2 (not update/2) because this runs in a request process.

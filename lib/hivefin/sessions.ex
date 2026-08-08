@@ -81,6 +81,11 @@ defmodule Hivefin.Sessions do
     @registry |> Registry.lookup(session_id) |> Enum.map(fn {pid, _attrs} -> pid end)
   end
 
+  @doc "Registered attrs for `session_id`'s socket(s) — e.g. to check ownership before commanding it."
+  def attrs(session_id) when is_binary(session_id) do
+    @registry |> Registry.lookup(session_id) |> Enum.map(fn {_pid, attrs} -> attrs end)
+  end
+
   @doc "Sends `message` to every socket for `session_id`."
   def push(session_id, message) when is_binary(session_id) do
     case pids(session_id) do

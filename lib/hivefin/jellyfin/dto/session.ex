@@ -24,15 +24,15 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   @doc "Required SessionInfoDto key names."
   def required_keys, do: Map.keys(@required)
 
-  # GeneralCommandType values hivefin can actually deliver: none, yet.
-  # Deliberately empty — there is no command-delivery endpoint at all (Task 9
-  # unbuilt). Jellyfin clients gate their control UI on this list, so
-  # advertising a command with nothing behind it produces a control that
-  # silently does nothing when pressed, a failure mode this project has
-  # already been bitten by. Intended set once Task 9 lands delivery:
-  # DisplayMessage, SetVolume, Mute, Unmute, ToggleMute. Populate then, not now.
-  @doc "GeneralCommandType values hivefin can actually deliver. Empty until Task 9 adds command delivery."
-  def supported_commands, do: []
+  # GeneralCommandType values hivefin can actually deliver — Task 9 added
+  # POST /Sessions/:id/Command/:command, which can send any GeneralCommandType
+  # (the command name is a path segment, not restricted to this list); these
+  # are the ones a real client's control UI would gate on and that hivefin has
+  # a concrete use for advertising.
+  @supported_commands ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
+
+  @doc "GeneralCommandType values hivefin advertises as deliverable."
+  def supported_commands, do: @supported_commands
 
   # Properties jellyfin-sdk-kotlin declares on PlayerStateInfo with no default
   # value — same MissingFieldException risk as @required above. Unlike
@@ -60,8 +60,8 @@ defmodule Hivefin.Jellyfin.Dto.Session do
   `opts[:controllable]` (default `false`) is whether this session holds a live
   socket right now. When true, `SupportsMediaControl`, `SupportsRemoteControl`,
   and `Capabilities.SupportsMediaControl` report `true` — this session is
-  addressable, it has an open socket. `SupportedCommands` still lists
-  `supported_commands/0`, which is `[]` until Task 9 adds command delivery.
+  addressable, it has an open socket. `SupportedCommands` lists
+  `supported_commands/0`.
   """
   def from_access_token(%AccessToken{} = at, opts \\ []) do
     user = at.user

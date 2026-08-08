@@ -41,13 +41,25 @@ defmodule Hivefin.Jellyfin.WsCommand do
     end
   end
 
-  @doc "GeneralCommand envelope. `Arguments` is always an object of strings."
+  @doc """
+  GeneralCommand envelope. `Arguments` is always an object of strings.
+
+  Non-scalar values (nested maps/lists — e.g. a client-sent `Arguments[Foo]=…`
+  or `Bar[]=1&Bar[]=2` query param landing here verbatim) are dropped rather
+  than stringified: `to_string/1` has no `String.Chars` impl for a map (raises,
+  discarding the whole request) and `to_string/1` on a list of binaries
+  silently runs them together via `List.to_string/1` (`["1","2"] -> "12"`).
+  Dropping the bad key is safer than either.
+  """
   def general(name, controlling_user_id, arguments)
       when is_binary(name) and is_binary(controlling_user_id) and is_map(arguments) do
     data = %{
       "Name" => name,
       "ControllingUserId" => controlling_user_id,
-      "Arguments" => Map.new(arguments, fn {k, v} -> {to_string(k), to_string(v)} end)
+      "Arguments" =>
+        arguments
+        |> Enum.filter(fn {_k, v} -> is_binary(v) or is_number(v) or is_boolean(v) end)
+        |> Map.new(fn {k, v} -> {to_string(k), to_string(v)} end)
     }
 
     WsMessage.build("GeneralCommand", data)

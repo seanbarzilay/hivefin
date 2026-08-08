@@ -211,12 +211,11 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert dto["PlayState"]["PositionTicks"] == 500
   end
 
-  # Pinned to [] on purpose: there is no command-delivery endpoint (Task 9
-  # unbuilt), and advertising a command with nothing behind it gives clients
-  # a control that silently does nothing when pressed. Do not populate this
-  # list before Task 9 lands delivery for whatever it lists.
-  test "supported_commands/0 is empty until Task 9 adds command delivery" do
-    assert SessionDto.supported_commands() == []
+  # Task 9 landed POST /Sessions/:id/Command/:command, so these are no longer
+  # aspirational — pinned literally so a change here is deliberate.
+  test "supported_commands/0 lists the GeneralCommandTypes hivefin delivers" do
+    assert SessionDto.supported_commands() ==
+             ~w(DisplayMessage SetVolume Mute Unmute ToggleMute)
   end
 
   test "a session with no live socket is not controllable", %{access_token: at} do
@@ -227,7 +226,7 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert dto["SupportedCommands"] == []
   end
 
-  test "a controllable session reports addressable but advertises no commands", %{
+  test "a controllable session reports addressable and advertises its commands", %{
     access_token: at
   } do
     dto = SessionDto.from_access_token(at, controllable: true)
@@ -235,10 +234,8 @@ defmodule Hivefin.Jellyfin.Dto.SessionTest do
     assert dto["SupportsMediaControl"] == true
     assert dto["SupportsRemoteControl"] == true
     assert dto["Capabilities"]["SupportsMediaControl"] == true
-    # No commands to advertise until Task 9 adds delivery — see
-    # supported_commands/0.
-    assert dto["SupportedCommands"] == []
-    assert dto["Capabilities"]["SupportedCommands"] == []
+    assert dto["SupportedCommands"] == SessionDto.supported_commands()
+    assert dto["Capabilities"]["SupportedCommands"] == SessionDto.supported_commands()
   end
 
   # Regression risk: the new :controllable option's map merge could clobber
