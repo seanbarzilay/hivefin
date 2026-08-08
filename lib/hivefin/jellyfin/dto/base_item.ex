@@ -65,6 +65,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
 
     base
     |> maybe_put_media_sources(playable?, fields, sources)
+    |> maybe_put_people(fields, item)
     |> drop_nils()
   end
 
@@ -114,6 +115,36 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       dto
     end
   end
+
+  # Gated on the Fields check ALONE — deliberately unlike maybe_put_media_sources/4,
+  # which also fires for any playable item. Copying that here would attach a full
+  # cast list to every movie in a library listing.
+  defp maybe_put_people(dto, fields, item) do
+    if include_field?(fields, "People") do
+      Map.put(dto, "People", people_for(item))
+    else
+      dto
+    end
+  end
+
+  defp people_for(%Item{id: id}) when is_binary(id) do
+    id
+    |> Hivefin.Library.PeopleContext.list_for_item()
+    |> Enum.map(fn entry ->
+      # All four emitted unconditionally. Only Id is required by
+      # jellyfin-sdk-kotlin, but jellyfin-web dereferences optional fields with
+      # no guard — the same trap that produced the PlayState and AdditionalUsers
+      # crashes.
+      %{
+        "Id" => Id.format(entry.person.id),
+        "Name" => entry.person.name,
+        "Role" => entry.role || "",
+        "Type" => entry.type
+      }
+    end)
+  end
+
+  defp people_for(_), do: []
 
   defp load_sources(item, opts) do
     sources =
