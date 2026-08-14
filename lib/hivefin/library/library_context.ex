@@ -289,6 +289,12 @@ defmodule Hivefin.Library.LibraryContext do
         library = get_library(id) ->
           [library]
 
+        # Wholphin movie page re-fetches People via GET /Items?Ids=<personIds>
+        # to read UserData.IsFavorite. Miss them and the list is empty; a
+        # malformed SPA/400 body here crashes kotlinx.
+        person = PeopleContext.get_person(id) ->
+          [person]
+
         true ->
           []
       end

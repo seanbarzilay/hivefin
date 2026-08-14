@@ -94,6 +94,9 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
 
         %Item{} = item ->
           BaseItem.from_item(item, fields: fields, user_data: user_data_for(item, user_data_map))
+
+        %Person{} = person ->
+          BaseItem.from_person(person)
       end)
 
     json(conn, BaseItem.query_result(items, total, start_index))
@@ -212,6 +215,31 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
   end
 
   @doc """
+  `GET /Items/Suggestions` — must not fall through to `/Items/:item_id`
+  (that 400s because "Suggestions" is not a UUID). Empty QueryResult.
+  """
+  def suggestions(conn, params) do
+    start_index = clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
+    json(conn, BaseItem.query_result([], 0, start_index))
+  end
+
+  @doc """
+  `GET /Movies/Recommendations` — RecommendationDto[]. HTML here crashes
+  kotlinx on the Movies library Recommended tab.
+  """
+  def movie_recommendations(conn, _params) do
+    json(conn, [])
+  end
+
+  @doc """
+  `GET /Genres` — QueryResult of genre folders. Empty until we store genres.
+  """
+  def genres(conn, params) do
+    start_index = clamp_non_neg(parse_int(params["StartIndex"] || params["startIndex"])) || 0
+    json(conn, BaseItem.query_result([], 0, start_index))
+  end
+
+  @doc """
   `GET /Items/:item_id/Intros` and `GET /Users/:user_id/Items/:item_id/Intros`.
 
   jellyfin-web always requests intros before PlaybackInfo. A 404 aborts play with
@@ -232,6 +260,44 @@ defmodule HivefinWeb.Jellyfin.ItemsController do
       "ThemeSongsResult" => Map.put(empty, "OwnerId", item_id),
       "SoundtrackSongsResult" => Map.put(empty, "OwnerId", item_id)
     })
+  end
+
+  @doc """
+  `GET /Items/:item_id/ThemeSongs` — ThemeMediaResult. Wholphin plays theme
+  music from this; a 404 body is not a ThemeMediaResult and kotlinx throws.
+  """
+  def theme_songs(conn, %{"item_id" => item_id}) do
+    json(conn, Map.put(BaseItem.query_result([], 0, 0), "OwnerId", item_id))
+  end
+
+  @doc """
+  `GET /Items/:item_id/ThemeVideos` — same empty ThemeMediaResult shape.
+  """
+  def theme_videos(conn, %{"item_id" => item_id}) do
+    json(conn, Map.put(BaseItem.query_result([], 0, 0), "OwnerId", item_id))
+  end
+
+  @doc """
+  `GET /Items/:item_id/SpecialFeatures` (and User/UserItems aliases).
+
+  Official Jellyfin returns a raw BaseItemDto **array**, not a QueryResult.
+  """
+  def special_features(conn, _params) do
+    json(conn, [])
+  end
+
+  @doc """
+  `GET /Items/:item_id/LocalTrailers` — raw BaseItemDto array.
+  """
+  def local_trailers(conn, _params) do
+    json(conn, [])
+  end
+
+  @doc """
+  `GET /MediaSegments/:item_id` — intro/credit markers. Empty QueryResult.
+  """
+  def media_segments(conn, _params) do
+    json(conn, BaseItem.query_result([], 0, 0))
   end
 
   @doc """

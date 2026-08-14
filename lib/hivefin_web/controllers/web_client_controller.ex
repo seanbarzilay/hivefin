@@ -18,6 +18,7 @@ defmodule HivefinWeb.WebClientController do
     displaypreferences healthz readyz quickconnect admin api socket liveStreams
     livestreams libraries artists genres persons studios playbackinfo
     startup localization configuration playback scheduledtasks livetv
+    mediasegments movies suggestions
   )
 
   @doc """

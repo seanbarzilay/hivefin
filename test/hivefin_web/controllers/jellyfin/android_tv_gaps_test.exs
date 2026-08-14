@@ -207,6 +207,56 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
 
     assert theme["ThemeVideosResult"]["Items"] == []
     assert theme["ThemeSongsResult"]["Items"] == []
+
+    songs =
+      conn
+      |> get(~p"/Items/#{movie.id}/ThemeSongs")
+      |> json_response(200)
+
+    assert songs["Items"] == []
+    assert songs["OwnerId"] == movie.id
+
+    extras =
+      conn
+      |> get(~p"/Items/#{movie.id}/SpecialFeatures")
+      |> json_response(200)
+
+    assert extras == []
+
+    trailers =
+      conn
+      |> get(~p"/Items/#{movie.id}/LocalTrailers")
+      |> json_response(200)
+
+    assert trailers == []
+
+    segments =
+      conn
+      |> get(~p"/MediaSegments/#{movie.id}")
+      |> json_response(200)
+
+    assert segments["Items"] == []
+
+    recs =
+      conn
+      |> get(~p"/Movies/Recommendations")
+      |> json_response(200)
+
+    assert recs == []
+
+    suggestions =
+      conn
+      |> get(~p"/Items/Suggestions")
+      |> json_response(200)
+
+    assert suggestions["Items"] == []
+
+    genres =
+      conn
+      |> get(~p"/Genres")
+      |> json_response(200)
+
+    assert genres["Items"] == []
   end
 
   test "POST /DisplayPreferences/:id returns 204", %{conn: conn, user: user} do

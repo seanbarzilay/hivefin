@@ -129,12 +129,23 @@ defmodule HivefinWeb.Router do
     # Modern SDK paths used by jellyfin-vue (fetchIndexPage + item/library pages)
     get "/UserViews", ItemsController, :user_views
     get "/Items/Latest", ItemsController, :latest
+    get "/Items/Suggestions", ItemsController, :suggestions
     get "/UserItems/Resume", ItemsController, :user_items_resume
+    get "/UserItems/:item_id/SpecialFeatures", ItemsController, :special_features
     # GET /Items before /Items/:id so list is not captured as show
     get "/Items", ItemsController, :index
+    get "/Movies/Recommendations", ItemsController, :movie_recommendations
+    get "/Genres", ItemsController, :genres
     get "/Items/:item_id/Similar", ItemsController, :similar
     get "/Items/:item_id/Intros", ItemsController, :intros
     get "/Items/:item_id/ThemeMedia", ItemsController, :theme_media
+    # Wholphin/ATV movie page: kotlinx cannot parse the SPA JSON 404 as these
+    # shapes (ThemeMediaResult / BaseItemDto[]). Empty success matches official.
+    get "/Items/:item_id/ThemeSongs", ItemsController, :theme_songs
+    get "/Items/:item_id/ThemeVideos", ItemsController, :theme_videos
+    get "/Items/:item_id/SpecialFeatures", ItemsController, :special_features
+    get "/Items/:item_id/LocalTrailers", ItemsController, :local_trailers
+    get "/MediaSegments/:item_id", ItemsController, :media_segments
     post "/Items/:item_id/PlaybackInfo", PlaybackController, :create
     get "/Items/:item_id/PlaybackInfo", PlaybackController, :create
     # jellyfin-web / Android shell bitrate probe before starting playback
@@ -151,6 +162,9 @@ defmodule HivefinWeb.Router do
     get "/Users/:user_id/Items", ItemsController, :index
     # Intros before show so "Intros" is never treated as an item id
     get "/Users/:user_id/Items/:item_id/Intros", ItemsController, :intros
+    get "/Users/:user_id/Items/:item_id/SpecialFeatures", ItemsController, :special_features
+    get "/Users/:user_id/Items/:item_id/LocalTrailers", ItemsController, :local_trailers
+    get "/Users/:user_id/Items/:item_id/ThemeSongs", ItemsController, :theme_songs
     get "/Users/:user_id/Items/:item_id", ItemsController, :show
     post "/Users/:user_id/Items/:item_id/UserData", SessionsController, :update_user_data
     post "/Users/:user_id/PlayedItems/:item_id", SessionsController, :mark_played
