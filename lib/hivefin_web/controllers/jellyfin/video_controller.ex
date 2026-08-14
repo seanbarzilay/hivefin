@@ -167,15 +167,55 @@ defmodule HivefinWeb.Jellyfin.VideoController do
         {:error, :expired}
 
       {:error, _} ->
-        # Not a signed stream token. Android ExoPlayer deliberately keeps the
-        # token out of the URL ("we don't pass the access token in the URL",
-        # jellyfin-android AppModule) and sends `Authorization: MediaBrowser
-        # ... Token="..."` instead, so also accept header credentials — as
-        # real Jellyfin does on every endpoint.
-        [query_token, header_token(conn)]
-        |> Enum.filter(&(is_binary(&1) and &1 != ""))
-        |> Enum.uniq()
-        |> try_access_tokens(path_id, params)
+        # Not a signed stream token. Prefer header / query access tokens
+        # (jellyfin-vue, some web clients). Official Jellyfin's
+        # VideosController.GetVideoStream has no [Authorize] — Android TV
+        # ExoPlayer builds `/Videos/{id}/stream?static=true&mediaSourceId=...`
+        # with *no* api_key and a raw OkHttp client that does not attach the
+        # MediaBrowser header (PlaybackModule uses OkHttpFactory.createClient
+        # without the ApiClient interceptor). Fall back to anonymous item
+        # resolution so that UUID-unguessable DirectPlay works.
+        tokens =
+          [query_token, header_token(conn)]
+          |> Enum.filter(&(is_binary(&1) and &1 != ""))
+          |> Enum.uniq()
+
+        case try_access_tokens(tokens, path_id, params) do
+          {:ok, _, _} = ok -> ok
+          _ -> authorize_anonymous(path_id, params)
+        end
+    end
+  end
+
+  # Match Jellyfin: stream by item id + MediaSourceId without credentials.
+  defp authorize_anonymous(path_id, params) do
+    path_id = Id.coerce(path_id)
+
+    source_id =
+      Id.coerce(params["MediaSourceId"] || params["mediaSourceId"] || path_id)
+
+    source =
+      LibraryContext.get_media_source(source_id) ||
+        LibraryContext.first_media_source_for_item(source_id) ||
+        LibraryContext.first_media_source_for_item(path_id)
+
+    case source do
+      %MediaSource{id: msid, item_id: item_id} ->
+        item_id = Id.coerce(item_id)
+        msid = Id.coerce(msid)
+
+        if path_id == msid or path_id == item_id or source_id == item_id do
+          claims = %{user_id: nil, item_id: item_id, media_source_id: msid}
+
+          with {:ok, path} <- LibraryContext.media_path_for_item(item_id, claims) do
+            {:ok, claims, path}
+          end
+        else
+          {:error, :not_found}
+        end
+
+      nil ->
+        {:error, :not_found}
     end
   end
 

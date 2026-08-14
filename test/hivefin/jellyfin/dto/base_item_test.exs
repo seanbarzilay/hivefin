@@ -46,6 +46,23 @@ defmodule Hivefin.Jellyfin.Dto.BaseItemTest do
     assert dto["MediaSources"] == []
   end
 
+  test "PremiereDate is a zoned ISO-8601 datetime, not a date-only string" do
+    item = %Item{
+      id: Ecto.UUID.generate(),
+      library_id: Ecto.UUID.generate(),
+      name: "X",
+      type: :movie,
+      production_year: 2000,
+      premiere_date: ~D[2000-10-07],
+      sort_name: "x"
+    }
+
+    dto = BaseItem.from_item(item)
+
+    assert dto["PremiereDate"] == "2000-10-07T00:00:00Z"
+    assert {:ok, ~U[2000-10-07 00:00:00Z], 0} = DateTime.from_iso8601(dto["PremiereDate"])
+  end
+
   test "ParentId prefers item parent over library for nested items" do
     library_id = Ecto.UUID.generate()
     parent_id = Ecto.UUID.generate()

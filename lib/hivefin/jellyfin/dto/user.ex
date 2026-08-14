@@ -22,27 +22,45 @@ defmodule Hivefin.Jellyfin.Dto.User do
       # jellyfin-web reads Configuration after GET /Users/:id; empty map leaves
       # home sections/preferences undefined and yields a blank Home shell.
       "Configuration" => default_configuration(),
-      "Policy" => %{
-        "IsAdministrator" => user.admin,
-        "IsHidden" => false,
-        "IsDisabled" => false,
-        "EnableAllFolders" => true,
-        "EnableRemoteAccess" => true,
-        "EnableMediaPlayback" => true,
-        "EnableAudioPlaybackTranscoding" => true,
-        "EnableVideoPlaybackTranscoding" => true,
-        "EnablePlaybackRemuxing" => true,
-        "EnableContentDeletion" => false,
-        "EnableContentDownloading" => true,
-        "EnableSyncTranscoding" => true,
-        "EnableMediaConversion" => false,
-        "EnableRemoteControlOfOtherUsers" => user.admin,
-        "EnableSharedDeviceControl" => true,
-        "EnableRemoteControlOfSharedDevices" => true,
-        "EnableLiveTvManagement" => false,
-        "EnableLiveTvAccess" => false,
-        "EnableUserPreferenceAccess" => true
-      }
+      "Policy" => default_policy(user)
+    }
+  end
+
+  # Fields kotlinx.serialization marks required on UserPolicy (no defaults).
+  # Android TV 0.19 fails AuthenticateByName if any of these are omitted.
+  defp default_policy(%User{} = user) do
+    %{
+      "IsAdministrator" => user.admin,
+      "IsHidden" => false,
+      "IsDisabled" => false,
+      "EnableAllFolders" => true,
+      "EnableAllDevices" => true,
+      "EnableAllChannels" => true,
+      "EnableRemoteAccess" => true,
+      "EnableMediaPlayback" => true,
+      "EnableAudioPlaybackTranscoding" => true,
+      "EnableVideoPlaybackTranscoding" => true,
+      "EnablePlaybackRemuxing" => true,
+      "ForceRemoteSourceTranscoding" => false,
+      "EnableContentDeletion" => false,
+      "EnableContentDownloading" => true,
+      "EnableSyncTranscoding" => true,
+      "EnableMediaConversion" => false,
+      "EnableRemoteControlOfOtherUsers" => user.admin,
+      "EnableSharedDeviceControl" => true,
+      "EnableLiveTvManagement" => false,
+      "EnableLiveTvAccess" => false,
+      "EnableUserPreferenceAccess" => true,
+      "EnablePublicSharing" => false,
+      "InvalidLoginAttemptCount" => 0,
+      "LoginAttemptsBeforeLockout" => -1,
+      "MaxActiveSessions" => 0,
+      "RemoteClientBitrateLimit" => 0,
+      "AuthenticationProviderId" =>
+        "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider",
+      "PasswordResetProviderId" =>
+        "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider",
+      "SyncPlayAccess" => "CreateAndJoinGroups"
     }
   end
 

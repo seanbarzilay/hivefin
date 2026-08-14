@@ -25,21 +25,15 @@ defmodule HivefinWeb.Jellyfin.UserController do
          true <- is_binary(password),
          {:ok, user} <- Accounts.authenticate(username, password),
          {:ok, token, at} <- Accounts.issue_token(user, device_attrs) do
+      # Android TV kotlinx.serialization requires SessionInfoDto fields that
+      # the previous stub omitted (PlayableMediaTypes, LastActivityDate, …).
+      session = Dto.Session.from_access_token(%{at | user: user})
+
       json(conn, %{
         "User" => Dto.User.from_user(user),
         "AccessToken" => token,
         "ServerId" => Hivefin.Jellyfin.Id.format(SystemInfo.server_id()),
-        "SessionInfo" => %{
-          "Id" => Hivefin.Jellyfin.Id.format(at.id),
-          "UserId" => Hivefin.Jellyfin.Id.format(user.id),
-          "UserName" => user.name,
-          "Client" => device_attrs[:client],
-          "DeviceName" => device_attrs[:device_name],
-          "DeviceId" => device_attrs[:device_id],
-          "ApplicationVersion" => device_attrs[:client_version],
-          "IsActive" => true,
-          "ServerId" => Hivefin.Jellyfin.Id.format(SystemInfo.server_id())
-        }
+        "SessionInfo" => session
       })
 
     else

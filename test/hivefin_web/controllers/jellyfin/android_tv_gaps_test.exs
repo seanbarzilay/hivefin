@@ -293,5 +293,10 @@ defmodule HivefinWeb.Jellyfin.AndroidTvGapsTest do
     assert is_binary(body["SessionInfo"]["Id"])
     assert body["SessionInfo"]["UserId"] == body["User"]["Id"]
     assert body["SessionInfo"]["Client"] == "Android TV"
+    # kotlinx.serialization SessionInfoDto required (no defaults)
+    for key <- ~w(PlayableMediaTypes LastActivityDate LastPlaybackCheckIn SupportsMediaControl SupportsRemoteControl HasCustomDeviceName SupportedCommands) do
+      assert Map.has_key?(body["SessionInfo"], key), "missing #{key}"
+      refute is_nil(body["SessionInfo"][key]), "#{key} is null"
+    end
   end
 end

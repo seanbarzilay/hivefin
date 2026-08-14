@@ -59,7 +59,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "ImageTags" => image_tags,
       # Some clients (and person cards) prefer PrimaryImageTag over ImageTags.
       "PrimaryImageTag" => Map.get(image_tags, "Primary"),
-      "UserData" => user_data(user_data),
+      "UserData" => user_data(user_data, item.id),
       "RunTimeTicks" => runtime_ticks_from_sources(sources)
     }
 
@@ -84,7 +84,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "IsFolder" => true,
       "SortName" => default_sort_name(library.name),
       "ImageTags" => %{},
-      "UserData" => user_data(Keyword.get(opts, :user_data))
+      "UserData" => user_data(Keyword.get(opts, :user_data), library.id)
     }
   end
 
@@ -140,7 +140,7 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
       "ProviderIds" => person.provider_ids || %{},
       "ImageTags" => image_tags,
       "PrimaryImageTag" => Map.get(image_tags, "Primary"),
-      "UserData" => user_data(nil)
+      "UserData" => user_data(nil, person.id)
     }
     |> Map.merge(count_fields(Keyword.get(opts, :counts)))
     |> drop_nils()
@@ -532,11 +532,21 @@ defmodule Hivefin.Jellyfin.Dto.BaseItem do
   defp season_id(%Item{type: :episode, parent_id: parent_id}), do: parent_id
   defp season_id(_), do: nil
 
-  defp user_data(nil), do: UserDataDto.default()
-  defp user_data(%UserData{} = data), do: UserDataDto.from_user_data(data)
-  defp user_data(%{} = data), do: UserDataDto.from_user_data(data)
+  defp user_data(data, item_id \\ nil)
+  defp user_data(nil, item_id), do: UserDataDto.default(item_id)
+  defp user_data(%UserData{} = data, item_id), do: UserDataDto.from_user_data(data, item_id)
+  defp user_data(%{} = data, item_id), do: UserDataDto.from_user_data(data, item_id)
 
-  defp premiere_date(%Date{} = date), do: Date.to_iso8601(date)
+  # jellyfin-sdk-kotlin DateTimeSerializer is ZonedDateTime.parse/1. A date-only
+  # ISO string ("2000-10-07") throws DateTimeParseException and the SDK returns
+  # LocalDateTime.MIN, which Android TV formats as "Jan 1, 1000000000".
+  # Official Jellyfin emits a UTC midnight instant (…T00:00:00.0000000Z).
+  defp premiere_date(%Date{} = date) do
+    date
+    |> DateTime.new!(~T[00:00:00])
+    |> DateTime.to_iso8601()
+  end
+
   defp premiere_date(_), do: nil
 
   defp default_sort_name(name) when is_binary(name), do: String.downcase(name)
